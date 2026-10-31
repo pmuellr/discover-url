@@ -1,0 +1,29 @@
+{
+  "name": "discover-url",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "description": "build and parse Kibana Discover URLs",
+  "license": "MIT",
+  "author": "Patrick Mueller <pmuellr@apache.org> (https://github.com/pmuellr)",
+  "homepage": "https://github.com/pmuellr/discover-url",
+  "exports": "./discover-url.js",
+  "bin": {
+    "discover-url": "discover-url.js"
+  },
+  "engines": {
+    "node": ">=22.4"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pmuellr/discover-url.git"
+  },
+  "bugs": {
+    "url": "https://github.com/pmuellr/discover-url/issues"
+  },
+  "dependencies": {
+  }
+}
