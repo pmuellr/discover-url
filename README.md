@@ -38,8 +38,8 @@ dependencies.  Node.js 22.4 or later is required for the command line.
 examples
 ================================================================================
 
-See the [EXAMPLES.md][] file for examples that use ES|QL on the Kibana event
-log.
+See the [EXAMPLES.md][] file for examples that use KQL and filters on the
+Kibana event log, including how to create the event log data view they use.
 
 
 parsing an existing Discover URL
@@ -90,8 +90,8 @@ usage
       --saved-query ID          saved query id
       --saved-search ID         open a saved Discover session
       --session ID              search session id
-      --tab-id ID               Discover tab id
-      --tab-label LABEL         Discover tab label
+      --tab-label LABEL         open the URL in a new Discover tab with this label
+      --tab-id ID               select an open Discover tab (default new with --tab-label)
 
     time:
       --from TIME               start time, e.g. now-24h or 2026-10-31T00:00:00Z (default now-15m if --to given)
@@ -114,7 +114,7 @@ usage
         leading ^ or !       negate (! needs quoting in interactive shells; ^ does not in bash)
         leading %            add the filter disabled
       e.g. --filter %kibana.task.type!=alerting:.es-query   --filter-exists %^error.message
-      filters get meta.index from --data-view (unless --esql is used)
+      filters get meta.index from --data-view, and can not be used with --esql
 
     layout:
       --columns A,B,C           columns (repeatable)
@@ -150,21 +150,18 @@ using as a module
 #### Node.js
 
 ```js
-import { buildDiscoverUrl, existsFilter, phraseFilter } from 'discover-url';
+import { buildDiscoverUrl } from 'discover-url';
 
 const url = buildDiscoverUrl({
   kibanaUrl: 'http://localhost:5601',
+  tab: { label: 'Late task runs' },
   timeRange: { from: 'now-1h', to: 'now' },
   esql: `FROM .kibana-event-log-*
+    | WHERE event.provider == "taskManager" AND event.action == "task-run"
     | EVAL delay_s = ROUND(kibana.task.schedule_delay / 1000000000.0, 3)
     | WHERE delay_s > 60
-    | KEEP @timestamp, kibana.task.type, delay_s, error.message
     | SORT delay_s DESC`,
-  filters: [
-    phraseFilter('event.provider', 'taskManager'),
-    phraseFilter('event.action', 'task-run'),
-    existsFilter('error.message', { negate: true, disabled: true }),
-  ],
+  columns: ['kibana.task.type', 'delay_s', 'error.message'],
   breakdownField: 'kibana.task.type',
 });
 ```
@@ -183,13 +180,13 @@ your page (browsers won't load modules from `file:` URLs):
 
   document.getElementById('slow-rules').href = buildDiscoverUrl({
     kibanaUrl: 'http://localhost:5601',
+    tab: { label: 'Slow rule runs' },
     timeRange: { from: 'now-24h', to: 'now' },
     esql: `FROM .kibana-event-log-*
       | WHERE event.provider == "alerting" AND event.action == "execute"
       | EVAL duration_s = ROUND(event.duration / 1000000000.0, 3)
-      | SORT duration_s DESC
-      | KEEP @timestamp, rule.name, duration_s
-      | LIMIT 100`,
+      | SORT duration_s DESC`,
+    columns: ['rule.name', 'duration_s'],
   });
 </script>
 ```
@@ -210,9 +207,13 @@ your page (browsers won't load modules from `file:` URLs):
 | `encodeUriQuery(text)`                       | URL-encode a value the way Kibana does
 | `paramsFromArgs(args)` / `main(args)`        | the command line (Node.js only)
 | `DEFAULT_KIBANA_URL`                         | `http://localhost:5601`
+| `NEW_TAB_ID`                                 | `new`, the tab id that opens a new Discover tab
 
 The filter `options` are `negate`, `disabled`, `pinned`, `alias` (a custom
-label for the pill), and `index` (the data view id, not needed with ES|QL).  See the `DiscoverUrlParams`
+label for the pill), and `index` (the data view id).  Filter pills only work
+with KQL and Lucene queries; Discover ignores them in ES|QL mode, so
+`buildDiscoverUrl()` throws an error when they're combined with `esql`, and
+`parseDiscoverUrl()` drops them with a warning.  See the `DiscoverUrlParams`
 type at the bottom of `discover-url.js` for all the parameters.
 
 [rison]: https://github.com/Nanonid/rison
@@ -230,6 +231,12 @@ which uses the Node.js test runner.  There are no dependencies to install.
 
 change log
 ================================================================================
+
+#### 2026-10-31 - 1.1.0
+
+- filters with an ES|QL query are now an error, since Discover ignores them
+- `--tab-label` opens a new tab without needing `--tab-id`
+- the examples use KQL and a data view, with instructions to create it
 
 #### 2026-10-31 - 1.0.0
 
@@ -280,6 +287,8 @@ Documentation:
 
 - [Discover][Kibana Discover], [using ES|QL in Discover][docs-discover-esql],
   and [filtering][docs-filtering]
+- the [data views API][docs-data-views-api], used to create the event log
+  data view in the examples
 - the [ES|QL reference][docs-esql], including the
   [math functions][docs-esql-math] like `ROUND()`
 - [rison][], the encoding used for Discover's URL state
@@ -296,6 +305,7 @@ Documentation:
 [kb-event-log-mappings]: https://github.com/elastic/kibana/blob/main/x-pack/platform/plugins/shared/event_log/generated/mappings.json
 [docs-discover-esql]:    https://www.elastic.co/docs/explore-analyze/discover/try-esql
 [docs-filtering]:        https://www.elastic.co/docs/explore-analyze/query-filter/filtering
+[docs-data-views-api]:   https://www.elastic.co/docs/api/doc/kibana/group/endpoint-data-views
 [docs-esql]:             https://www.elastic.co/docs/reference/query-languages/esql
 [docs-esql-math]:        https://www.elastic.co/docs/reference/query-languages/esql/functions-operators/math-functions
 

@@ -69,14 +69,32 @@ describe('discover-url.js command line', () => {
     ]);
   });
 
-  it('pins filters with --pin-filters and leaves --esql filters without an index', async () => {
+  it('opens a new tab for --tab-label without --tab-id', () => {
+    const { status, stdout } = run(['--tab-label', 'Slow rules']);
+    assert.equal(status, 0);
+    assert.equal(stdout, `${KIBANA_URL}/app/discover#/?_tab=(tabId:new,tabLabel:'Slow%20rules')\n`);
+  });
+
+  it('pins filters with --pin-filters', async () => {
     const params = await paramsFromArgs([
-      '--esql', 'FROM .kibana-event-log-*',
       '--data-view', EVENT_LOG_DATA_VIEW,
       '--pin-filters',
       '--filter', 'event.provider=alerting',
     ]);
-    assert.deepEqual(params.filters, [phraseFilter('event.provider', 'alerting', { pinned: true })]);
+    assert.deepEqual(params.filters, [
+      phraseFilter('event.provider', 'alerting', { index: EVENT_LOG_DATA_VIEW, pinned: true }),
+    ]);
+  });
+
+  it('rejects filters with an ES|QL query from --esql or --params', () => {
+    const fromEsql = run(['--esql', 'FROM .kibana-event-log-ds', '--filter', 'event.provider=alerting']);
+    assert.equal(fromEsql.status, 1);
+    assert.equal(fromEsql.stdout, '');
+    assert.match(fromEsql.stderr, /filters can not be used with an ES\|QL query/);
+
+    const fromParams = run(['--params', '-', '--esql', 'FROM .kibana-event-log-ds'], JSON.stringify(EVENT_LOG_PARAMS));
+    assert.equal(fromParams.status, 1);
+    assert.match(fromParams.stderr, /filters can not be used with an ES\|QL query/);
   });
 
   it('reads --params from a file and lets options override it', () => {

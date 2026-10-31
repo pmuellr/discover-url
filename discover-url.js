@@ -14,6 +14,9 @@
 
 export const DEFAULT_KIBANA_URL = 'http://localhost:5601';
 
+/** The tab id that makes Discover open the URL in a new tab. */
+export const NEW_TAB_ID = 'new';
+
 // ---------------------------------------------------------------------------
 // exported functions
 // ---------------------------------------------------------------------------
@@ -57,6 +60,7 @@ export function buildDiscoverUrl(params = {}) {
 
   const query = resolveQuery(params);
   const isEsql = query !== undefined && 'esql' in query;
+  if (isEsql && filters.length) throw new Error(ESQL_FILTERS_ERROR);
 
   /** @type {RisonValue} */
   let dataSource;
@@ -103,7 +107,7 @@ export function buildDiscoverUrl(params = {}) {
 
   /** @type {Array<[string, RisonObject | undefined]>} */
   const states = [
-    ['_tab', tab ? compact({ tabId: tab.id, tabLabel: tab.label }) : undefined],
+    ['_tab', tab ? compact({ tabId: tab.id ?? NEW_TAB_ID, tabLabel: tab.label }) : undefined],
     ['_g', globalState],
     ['_a', appState],
     ['_p', profileState],
@@ -196,6 +200,11 @@ export function parseDiscoverUrl(url) {
       default:
         warnings.push(`ignored URL parameter "${key}"`);
     }
+  }
+
+  if (params.esql !== undefined && params.filters) {
+    warnings.push('ignored filters (Discover ignores them in ES|QL mode)');
+    delete params.filters;
   }
 
   return { params, warnings };
@@ -375,6 +384,9 @@ export async function main(args = process.argv.slice(2)) {
 // ---------------------------------------------------------------------------
 // url builder helpers
 // ---------------------------------------------------------------------------
+
+const ESQL_FILTERS_ERROR =
+  'filters can not be used with an ES|QL query (Discover ignores them); use a WHERE command in the query instead';
 
 /** @type {(params: DiscoverUrlParams) => DiscoverQuery | undefined} */
 function resolveQuery(params) {
@@ -679,11 +691,10 @@ function paramsToArgGroups(params) {
   addOption(groups, 'space', spaceId);
   addOption(groups, 'saved-search', savedSearchId);
   addOption(groups, 'session', searchSessionId);
-  addOption(groups, 'tab-id', tab?.id);
+  if (tab?.label === undefined || tab.id !== NEW_TAB_ID) addOption(groups, 'tab-id', tab?.id);
   addOption(groups, 'tab-label', tab?.label);
 
   const query = resolveQuery(params);
-  const isEsql = query !== undefined && 'esql' in query;
   if (query !== undefined) {
     if ('esql' in query) addOption(groups, 'esql', query.esql);
     else addOption(groups, query.language === 'kuery' ? 'kql' : 'lucene', query.query);
@@ -701,7 +712,7 @@ function paramsToArgGroups(params) {
   /** @type {FilterOptions} */
   const common = {
     pinned: filters.length > 0 && filters.every(isPinned),
-    index: isEsql ? undefined : dataViewId,
+    index: dataViewId,
   };
   if (common.pinned) groups.push(['--pin-filters']);
   for (const filter of filters) groups.push(filterToArgGroup(filter, common));
@@ -838,9 +849,8 @@ async function paramsFromValues(values, tokens) {
     throw new Error('--doc-id and --doc-index must be used together');
   }
 
-  const tabId = values['tab-id'] ?? base.tab?.id;
   const tabLabel = values['tab-label'] ?? base.tab?.label;
-  if (tabLabel !== undefined && tabId === undefined) throw new Error('--tab-label requires --tab-id');
+  const tabId = values['tab-id'] ?? base.tab?.id ?? (tabLabel === undefined ? undefined : NEW_TAB_ID);
 
   const refreshPaused = values['refresh-paused'];
   const refreshInterval =
@@ -854,14 +864,10 @@ async function paramsFromValues(values, tokens) {
   const hasQueryOverride = [values.esql, values.kql, values.lucene].some(
     (value) => value !== undefined
   );
-  const baseUsesEsql =
-    base.esql !== undefined || (base.query !== undefined && 'esql' in base.query);
-  const usesEsql = values.esql !== undefined || (!hasQueryOverride && baseUsesEsql);
-  const dataViewId = values['data-view'] ?? base.dataViewId;
   /** @type {FilterOptions} */
   const filterOptions = {
     pinned: values['pin-filters'] ?? false,
-    index: usesEsql ? undefined : dataViewId,
+    index: values['data-view'] ?? base.dataViewId,
   };
 
   /** @type {DiscoverUrlParams} */
@@ -1429,7 +1435,7 @@ isRunAsScript().then(async (isScript) => {
  * - disabled: add the filter pill, but leave it disabled
  * - pinned: pin the filter (stored in `_g`, follows the user across apps)
  * - alias: custom label for the filter pill
- * - index: data view id the filter belongs to (optional for ES|QL)
+ * - index: data view id the filter belongs to
  * @typedef {{
  *   negate?: boolean;
  *   disabled?: boolean;
@@ -1464,7 +1470,10 @@ isRunAsScript().then(async (isScript) => {
 
 /** @typedef {{ id: string; index: string; routing?: string }} ExpandedDoc */
 
-/** @typedef {{ id: string; label?: string }} DiscoverTab */
+/**
+ * A Discover tab; `id` defaults to NEW_TAB_ID, which opens the URL in a new tab with `label`.
+ * @typedef {{ id?: string; label?: string }} DiscoverTab
+ */
 
 /**
  * Parameters for buildDiscoverUrl():
@@ -1472,10 +1481,10 @@ isRunAsScript().then(async (isScript) => {
  * - spaceId: Kibana space id; omitted or `default` means the default space
  * - savedSearchId: open a saved Discover session by id
  * - searchSessionId: restore a background search session
- * - tab: select (or create) a Discover tab
+ * - tab: open a new Discover tab with a label, e.g. `{ label: 'Slow rules' }`, or select a tab by id
  * - esql / kql / lucene / query: the query (at most one); esql switches Discover to ES|QL mode
  * - dataViewId: data view id (data view mode only)
- * - filters: filter pills; filters with `$state.store === 'globalState'` are pinned
+ * - filters: filter pills (not with esql); filters with `$state.store === 'globalState'` are pinned
  * - grid: data grid settings, e.g. `{ columns: { message: { width: 400 } } }`
  * - interval: histogram interval, e.g. `auto`, `h`, `d`
  * - profileState: URL-type context-awareness profile state (`_p`)
@@ -1572,8 +1581,8 @@ query and data:
   --saved-query ID          saved query id
   --saved-search ID         open a saved Discover session
   --session ID              search session id
-  --tab-id ID               Discover tab id
-  --tab-label LABEL         Discover tab label
+  --tab-label LABEL         open the URL in a new Discover tab with this label
+  --tab-id ID               select an open Discover tab (default new with --tab-label)
 
 time:
   --from TIME               start time, e.g. now-24h or 2026-10-31T00:00:00Z (default now-15m if --to given)
@@ -1596,7 +1605,7 @@ filters (repeatable):
     leading ^ or !       negate (! needs quoting in interactive shells; ^ does not in bash)
     leading %            add the filter disabled
   e.g. --filter %kibana.task.type!=alerting:.es-query   --filter-exists %^error.message
-  filters get meta.index from --data-view (unless --esql is used)
+  filters get meta.index from --data-view, and can not be used with --esql
 
 layout:
   --columns A,B,C           columns (repeatable)

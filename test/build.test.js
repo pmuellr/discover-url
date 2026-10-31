@@ -53,6 +53,13 @@ describe('buildDiscoverUrl', () => {
     assert.equal(url, 'https://kb.example.com/xyz/s/dev/app/discover#/view/abc?searchSessionId=s1');
   });
 
+  it('opens a new tab when the tab has a label but no id', () => {
+    assert.equal(
+      buildDiscoverUrl({ kibanaUrl: KIBANA_URL, tab: { label: 'Slow rules' } }),
+      `${DISCOVER}?_tab=(tabId:new,tabLabel:'Slow%20rules')`
+    );
+  });
+
   it('omits the default space', () => {
     assert.equal(buildDiscoverUrl({ kibanaUrl: KIBANA_URL, spaceId: 'default' }), DISCOVER);
   });
@@ -87,6 +94,13 @@ describe('buildDiscoverUrl', () => {
     assert.equal(
       buildDiscoverUrl({ kibanaUrl: KIBANA_URL, esql: 'FROM x', dataViewId: EVENT_LOG_DATA_VIEW }),
       `${DISCOVER}?_a=(dataSource:(type:esql),query:(esql:'FROM%20x'))`
+    );
+  });
+
+  it('rejects filters in ES|QL mode', () => {
+    assert.throws(
+      () => buildDiscoverUrl({ esql: 'FROM x', filters: [existsFilter('error.message')] }),
+      /filters can not be used with an ES\|QL query/
     );
   });
 

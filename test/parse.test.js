@@ -58,6 +58,14 @@ describe('parseDiscoverUrl', () => {
     assert.deepEqual(parseDiscoverUrl(url).params, { kibanaUrl: KIBANA_URL, esql: EVENT_LOG_ESQL });
   });
 
+  it('drops filters from ES|QL URLs with a warning', () => {
+    const { params, warnings } = parseDiscoverUrl(
+      "#/?_g=(filters:!((meta:(key:a),query:(match_all:()))))&_a=(query:(esql:'FROM x'))"
+    );
+    assert.deepEqual(params, { esql: 'FROM x' });
+    assert.deepEqual(warnings, ['ignored filters (Discover ignores them in ES|QL mode)']);
+  });
+
   it('accepts the legacy index and flat sort forms', () => {
     const { params } = parseDiscoverUrl("#/?_a=(index:.kibana-event-log-ds,sort:!('@timestamp',asc))");
     assert.deepEqual(params, { dataViewId: EVENT_LOG_DATA_VIEW, sort: [['@timestamp', 'asc']] });
@@ -100,11 +108,12 @@ describe('parseDiscoverUrl', () => {
         spaceId: 'dev',
         savedSearchId: 'abc',
         searchSessionId: 's1',
-        esql: "FROM .kibana-event-log-* | WHERE message == \"it's!\" | LIMIT 10",
+        kql: 'message: "it\'s!"',
+        dataViewId: EVENT_LOG_DATA_VIEW,
         timeRange: { from: '2026-10-30T00:00:00.000Z', to: 'now' },
         refreshInterval: { pause: false, value: 5000 },
         filters: [
-          phraseFilter('event.provider', 'alerting', { pinned: true }),
+          phraseFilter('event.provider', 'alerting', { index: EVENT_LOG_DATA_VIEW, pinned: true }),
           phraseFilter('kibana.alert.rule.execution.metrics.number_of_searches', 2),
           existsFilter('error.message', { negate: true, disabled: true }),
           customFilter({ query_string: { query: 'rule.name:*cpu*' } }),
@@ -159,6 +168,11 @@ describe('paramsToArgs', () => {
       '--kibana', 'https://kb',
       '--refresh', '60000',
     ]);
+  });
+
+  it('leaves out --tab-id new when the tab has a label', () => {
+    assert.deepEqual(paramsToArgs({ tab: { id: 'new', label: 'Slow rules' } }), ['--tab-label', 'Slow rules']);
+    assert.deepEqual(paramsToArgs({ tab: { id: 'new' } }), ['--tab-id', 'new']);
   });
 
   it('uses --name=value for values starting with "-"', () => {
