@@ -6,16 +6,23 @@
 // Command line:  discover-url.js --help
 //                discover-url.js --parse '<discover url>' [--output args|json]
 // Node module:   import { buildDiscoverUrl, phraseFilter } from 'discover-url';
-// Browser:       <script type="module">
-//                  import { buildDiscoverUrl } from './discover-url.js';
-//                </script>
+//                const { buildDiscoverUrl } = require('discover-url');
+// Browser:       <script src="discover-url.js"></script>
+//                <script> discoverUrl.buildDiscoverUrl({ ... }) </script>
 //
 // No npm dependencies. Node built-ins are only loaded (dynamically) when run from the command line.
+// This is a CommonJS file rather than an ES module, so browsers can load it with <script src> from
+// file: URLs, where they refuse to load ES modules.
 
-export const DEFAULT_KIBANA_URL = 'http://localhost:5601';
+'use strict';
+
+// keeps the helpers out of the page's global scope when loaded with <script src>
+(function () {
+
+const DEFAULT_KIBANA_URL = 'http://localhost:5601';
 
 /** The tab id that makes Discover open the URL in a new tab. */
-export const NEW_TAB_ID = 'new';
+const NEW_TAB_ID = 'new';
 
 // ---------------------------------------------------------------------------
 // exported functions
@@ -25,7 +32,7 @@ export const NEW_TAB_ID = 'new';
  * Build a Discover URL from the given parameters.
  * @type {(params?: DiscoverUrlParams) => string}
  */
-export function buildDiscoverUrl(params = {}) {
+function buildDiscoverUrl(params = {}) {
   const {
     kibanaUrl = defaultKibanaUrl(),
     spaceId,
@@ -130,7 +137,7 @@ export function buildDiscoverUrl(params = {}) {
  * Parse a Discover URL, `#/...` fragment, or `_a=...&_g=...` query string into DiscoverUrlParams.
  * @type {(url: string) => ParsedDiscoverUrl}
  */
-export function parseDiscoverUrl(url) {
+function parseDiscoverUrl(url) {
   /** @type {DiscoverUrlParams} */
   const params = {};
   /** @type {string[]} */
@@ -214,7 +221,7 @@ export function parseDiscoverUrl(url) {
  * Convert DiscoverUrlParams into discover-url.js command-line arguments.
  * @type {(params: DiscoverUrlParams) => string[]}
  */
-export function paramsToArgs(params) {
+function paramsToArgs(params) {
   return paramsToArgGroups(params).flat();
 }
 
@@ -222,7 +229,7 @@ export function paramsToArgs(params) {
  * Filter matching documents where `field` is `value` ("is" pill).
  * @type {(field: string, value: string | number | boolean, options?: FilterOptions) => Filter}
  */
-export function phraseFilter(field, value, options = {}) {
+function phraseFilter(field, value, options = {}) {
   return createFilter(
     { key: field, type: 'phrase', params: { query: value } },
     { match_phrase: { [field]: value } },
@@ -234,7 +241,7 @@ export function phraseFilter(field, value, options = {}) {
  * Filter matching documents where `field` is any of `values` ("is one of" pill).
  * @type {(field: string, values: Array<string | number | boolean>, options?: FilterOptions) => Filter}
  */
-export function phrasesFilter(field, values, options = {}) {
+function phrasesFilter(field, values, options = {}) {
   return createFilter(
     { key: field, type: 'phrases', params: values },
     {
@@ -251,7 +258,7 @@ export function phrasesFilter(field, values, options = {}) {
  * Filter matching documents where `field` is within `range` ("is between" pill).
  * @type {(field: string, range: RangeParams, options?: FilterOptions) => Filter}
  */
-export function rangeFilter(field, range, options = {}) {
+function rangeFilter(field, range, options = {}) {
   /** @type {RisonObject} */
   const params = { ...range };
   return createFilter(
@@ -265,7 +272,7 @@ export function rangeFilter(field, range, options = {}) {
  * Filter matching documents where `field` exists ("exists" pill).
  * @type {(field: string, options?: FilterOptions) => Filter}
  */
-export function existsFilter(field, options = {}) {
+function existsFilter(field, options = {}) {
   return createFilter({ key: field, type: 'exists', value: 'exists' }, { exists: { field } }, options);
 }
 
@@ -273,7 +280,7 @@ export function existsFilter(field, options = {}) {
  * Filter using arbitrary Elasticsearch query DSL ("custom" pill).
  * @type {(query: RisonObject, options?: FilterOptions) => Filter}
  */
-export function customFilter(query, options = {}) {
+function customFilter(query, options = {}) {
   return createFilter({ key: 'query', type: 'custom', value: JSON.stringify(query) }, query, options);
 }
 
@@ -281,7 +288,7 @@ export function customFilter(query, options = {}) {
  * Rison-encode a value; returns undefined for values that can't be encoded (like JSON.stringify).
  * @type {(input: unknown) => string | undefined}
  */
-export function risonEncode(input) {
+function risonEncode(input) {
   let value = input;
   if (value !== null && typeof value === 'object' && 'toJSON' in value) {
     const { toJSON } = value;
@@ -322,7 +329,7 @@ export function risonEncode(input) {
  * Decode a rison string (the format of Discover's `_a` / `_g` URL parameters).
  * @type {(text: string) => RisonValue}
  */
-export function risonDecode(text) {
+function risonDecode(text) {
   /** @type {RisonParser} */
   const parser = { text, index: 0 };
   const value = risonParseValue(parser);
@@ -334,7 +341,7 @@ export function risonDecode(text) {
  * URL-encode a query-string value the same way Kibana does for `_a` / `_g`.
  * @type {(value: string) => string}
  */
-export function encodeUriQuery(value) {
+function encodeUriQuery(value) {
   return encodeURIComponent(value)
     .replace(/%40/gi, '@')
     .replace(/%3A/gi, ':')
@@ -347,7 +354,7 @@ export function encodeUriQuery(value) {
  * Convert command-line arguments into DiscoverUrlParams (Node only).
  * @type {(args: string[]) => Promise<CliParams>}
  */
-export async function paramsFromArgs(args) {
+async function paramsFromArgs(args) {
   const { values, tokens } = await parseCliArgs(args);
   if (values.help) return { help: true };
   if (values.parse !== undefined) throw new Error('--parse is only supported by main()');
@@ -358,7 +365,7 @@ export async function paramsFromArgs(args) {
  * Run the command-line interface (Node only); resolves to the process exit code.
  * @type {(args?: string[]) => Promise<number>}
  */
-export async function main(args = process.argv.slice(2)) {
+async function main(args = process.argv.slice(2)) {
   try {
     const { values, tokens } = await parseCliArgs(args);
     if (values.help) {
@@ -1365,26 +1372,6 @@ function commandName() {
   return process.argv[1]?.split(/[\\/]/).pop() || 'discover-url.js';
 }
 
-/** @type {() => Promise<boolean>} */
-async function isRunAsScript() {
-  if (!globalThis.process?.versions?.node) return false;
-  const { main: isMain } = /** @type {ImportMeta & { main?: boolean }} */ (import.meta);
-  if (typeof isMain === 'boolean') return isMain;
-  const [, scriptPath] = process.argv;
-  if (!scriptPath) return false;
-  const { realpathSync } = await import('node:fs');
-  const { fileURLToPath } = await import('node:url');
-  try {
-    return realpathSync(scriptPath) === realpathSync(fileURLToPath(import.meta.url));
-  } catch {
-    return false;
-  }
-}
-
-isRunAsScript().then(async (isScript) => {
-  if (isScript) process.exitCode = await main();
-});
-
 // ---------------------------------------------------------------------------
 // types
 // ---------------------------------------------------------------------------
@@ -1635,3 +1622,50 @@ layout:
   -h, --help                show this help
 `;
 }
+
+// ---------------------------------------------------------------------------
+// exports
+// ---------------------------------------------------------------------------
+
+// Node only detects named exports (for `import { ... } from 'discover-url'`) when
+// `module.exports` is assigned an object literal, so the list is repeated for the browser.
+if (typeof module === 'object') {
+  module.exports = {
+    DEFAULT_KIBANA_URL,
+    NEW_TAB_ID,
+    buildDiscoverUrl,
+    parseDiscoverUrl,
+    paramsToArgs,
+    phraseFilter,
+    phrasesFilter,
+    rangeFilter,
+    existsFilter,
+    customFilter,
+    risonEncode,
+    risonDecode,
+    encodeUriQuery,
+    paramsFromArgs,
+    main,
+  };
+  if (require.main === module) main().then((exitCode) => (process.exitCode = exitCode));
+} else {
+  Object.assign(globalThis, {
+    discoverUrl: {
+      DEFAULT_KIBANA_URL,
+      NEW_TAB_ID,
+      buildDiscoverUrl,
+      parseDiscoverUrl,
+      paramsToArgs,
+      phraseFilter,
+      phrasesFilter,
+      rangeFilter,
+      existsFilter,
+      customFilter,
+      risonEncode,
+      risonDecode,
+      encodeUriQuery,
+    },
+  });
+}
+
+})();

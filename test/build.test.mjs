@@ -17,7 +17,7 @@ import {
   EVENT_LOG_PARAMS,
   EVENT_LOG_URL_REBUILT,
   KIBANA_URL,
-} from './fixtures.js';
+} from './fixtures.mjs';
 
 const DISCOVER = `${KIBANA_URL}/app/discover#/`;
 

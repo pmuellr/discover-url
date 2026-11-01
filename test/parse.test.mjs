@@ -19,7 +19,7 @@ import {
   EVENT_LOG_PARAMS,
   EVENT_LOG_URL,
   KIBANA_URL,
-} from './fixtures.js';
+} from './fixtures.mjs';
 
 describe('parseDiscoverUrl', () => {
   it('parses the event log URL copied from Discover', () => {

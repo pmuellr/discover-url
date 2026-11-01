@@ -16,7 +16,7 @@ import {
   EVENT_LOG_URL,
   EVENT_LOG_URL_REBUILT,
   KIBANA_URL,
-} from './fixtures.js';
+} from './fixtures.mjs';
 
 const SCRIPT = fileURLToPath(new URL('../discover-url.js', import.meta.url));
 

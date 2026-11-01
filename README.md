@@ -166,17 +166,24 @@ const url = buildDiscoverUrl({
 });
 ```
 
+`const { buildDiscoverUrl } = require('discover-url')` works too.
+
 #### web pages
 
-The module only loads Node.js built-ins when it's run from the command line,
-so it can be loaded directly in a browser.  Serve `discover-url.js` alongside
-your page (browsers won't load modules from `file:` URLs):
+The script only loads Node.js built-ins when it's run from the command line,
+so it can be loaded directly in a browser with `<script src>`, which adds a
+single `discoverUrl` global with the exports (except the command-line ones).
+Put `discover-url.js` (or a symlink to it) next to your page.  This works for
+pages opened from `file:` URLs as well as served ones; `discover-url.js` is a
+CommonJS file rather than an ES module because browsers won't load ES modules
+from `file:` URLs.
 
 ```html
 <a id="slow-rules">slow rule executions</a>
 
-<script type="module">
-  import { buildDiscoverUrl } from './discover-url.js';
+<script src="discover-url.js"></script>
+<script>
+  const { buildDiscoverUrl } = discoverUrl;
 
   document.getElementById('slow-rules').href = buildDiscoverUrl({
     kibanaUrl: 'http://localhost:5601',
@@ -231,6 +238,12 @@ which uses the Node.js test runner.  There are no dependencies to install.
 
 change log
 ================================================================================
+
+#### 2026-10-31 - 1.2.0
+
+- `discover-url.js` is now a CommonJS file, so web pages opened from `file:`
+  URLs can load it with `<script src>`; it adds a `discoverUrl` global.  Web
+  pages can no longer load it with `import`.
 
 #### 2026-10-31 - 1.1.0
 

@@ -38,6 +38,10 @@ Here are the general guidelines for contributing:
   * There is no build step; `discover-url.js` is used as-is.  Keep it free of
     errors when type-checked in VS Code (it uses JSDoc types and `// @ts-check`).
 
+  * `discover-url.js` must stay loadable as a plain `<script src>`, so it can't
+    use `import`, `export`, or `import.meta`.  New exports go in both lists at
+    the bottom of the file; `test/browser.test.mjs` checks that they match.
+
 * Never force push to the master branch.  Force pushing to bug / feature
   branches is both fine and expected.
 
