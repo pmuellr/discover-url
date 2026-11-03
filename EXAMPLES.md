@@ -1,10 +1,11 @@
 discover-url examples
 ================================================================================
 
-Examples of using [discover-url][] from the command line.
+Examples of using [discover-url][] from the command line, and from a web page
+(see [using discover-url in a web page](#using-discover-url-in-a-web-page)).
 
-The examples use KQL queries and filter pills on the Kibana event log, the
-`.kibana-event-log-ds` data stream that records rule executions, action
+The examples use KQL and ES|QL queries and filter pills on the Kibana event
+log, the `.kibana-event-log-ds` data stream that records rule executions, action
 executions, and task runs.  Each example uses `--open` to open the URL in your
 browser, as well as printing it, and `--tab-label` to open it in a new
 Discover tab with that name.
@@ -142,6 +143,21 @@ place when you move to other Kibana apps.
       --columns event.provider,event.action,error.message \
       --breakdown event.provider
 
+#### failed rule executions over the last week, with ES|QL
+
+An ES|QL query names its index in the `FROM` command, so it doesn't need a
+data view, and its conditions go in a `WHERE` command rather than filters.
+
+    discover-url --open \
+      --tab-label 'Failed rule runs' \
+      --from now-7d \
+      --esql 'FROM .kibana-event-log-ds | WHERE event.provider == "alerting" AND event.outcome == "failure"' \
+      --columns rule.name,error.message
+
+prints
+
+    http://localhost:5601/app/discover#/?_tab=(tabId:new,tabLabel:'Failed%20rule%20runs')&_g=(time:(from:now-7d,to:now))&_a=(columns:!(rule.name,error.message),dataSource:(type:esql),query:(esql:'FROM%20.kibana-event-log-ds%20%7C%20WHERE%20event.provider%20%3D%3D%20%22alerting%22%20AND%20event.outcome%20%3D%3D%20%22failure%22'))
+
 #### filters can't be used with ES|QL
 
 Discover ignores filter pills in ES|QL mode, so `discover-url` reports an
@@ -190,6 +206,69 @@ prints
       --hide-sidebar
 
 Add `--open` to the printed command to open the URL.
+
+
+using discover-url in a web page
+--------------------------------------------------------------------------------
+
+Put `discover-url.js` (or a symlink to it) next to the page, and load it with
+a `<script src>` tag.  This works for pages opened from `file:` URLs as well
+as served ones.  The script adds one global, `discoverUrl`, with the same
+functions as the Node.js module, except the command-line ones
+(`paramsFromArgs()` and `main()`).
+
+`buildDiscoverUrl()` takes the command-line options as camelCase keys, so
+`--data-view` is `dataView` and `--filter` is `{ filter: '...' }` in the
+`filters` array.  `discover-url --parse URL --output json` prints them for an
+existing Discover URL.
+
+```html
+<!DOCTYPE html>
+<html>
+<body>
+  <ul>
+    <li><a id="slow-rules" target="_blank">slow rule runs</a></li>
+    <li><a id="failed-rules" target="_blank">failed rule runs</a></li>
+  </ul>
+
+  <script src="discover-url.js"></script>
+  <script>
+    const { buildDiscoverUrl } = discoverUrl;
+
+    document.getElementById('slow-rules').href = buildDiscoverUrl({
+      tabLabel: 'Slow rule runs',
+      dataView: '.kibana-event-log-ds',
+      from: 'now-24h',
+      kql: 'event.provider: alerting and event.action: execute',
+      sort: ['event.duration:desc'],
+      columns: ['rule.name', 'event.outcome', 'event.duration'],
+    });
+
+    document.getElementById('failed-rules').href = buildDiscoverUrl({
+      tabLabel: 'Failed rule runs',
+      from: 'now-7d',
+      esql: 'FROM .kibana-event-log-ds | WHERE event.provider == "alerting" AND event.outcome == "failure"',
+      columns: ['rule.name', 'error.message'],
+    });
+  </script>
+</body>
+</html>
+```
+
+The URLs are for `http://localhost:5601`; add `kibana: 'https://...'` for
+other Kibana servers.
+
+To get autocomplete and type checking for the parameters in VS Code, put the
+page's code in its own file, like `links.js` loaded with
+`<script src="links.js">` after `discover-url.js`, and get the types from
+`discover-url.js` with a JSDoc type import:
+
+```js
+// @ts-check
+
+/** @type {typeof import('./discover-url.js')} */
+const { buildDiscoverUrl } = /** @type {any} */ (globalThis).discoverUrl;
+```
 
 
 [discover-url]: README.md
