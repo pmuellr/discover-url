@@ -12,6 +12,7 @@ const NODE_ONLY = ['default', 'module.exports', 'paramsFromArgs', 'main'];
 describe('discover-url.js as a <script src>', () => {
   /** @type {() => Record<string, unknown>} */
   function loadAsScript() {
+    /** @type { Record<string, unknown> } */
     const context = {};
     runInNewContext(SOURCE.replace(/^#!.*/, ''), context);
     return context;
