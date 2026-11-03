@@ -26,15 +26,19 @@ describe('parseDiscoverUrl', () => {
     assert.deepEqual(parseDiscoverUrl(EVENT_LOG_URL), { params: EVENT_LOG_PARAMS, warnings: [] });
   });
 
+  it('returns the params in command-line order', () => {
+    const { params } = parseDiscoverUrl(EVENT_LOG_URL);
+    assert.deepEqual(Object.keys(params), Object.keys(EVENT_LOG_PARAMS));
+  });
+
   it('parses a #/... fragment', () => {
     const fragment = EVENT_LOG_URL.slice(EVENT_LOG_URL.indexOf('#'));
-    const { kibanaUrl, ...params } = EVENT_LOG_PARAMS;
-    assert.deepEqual(parseDiscoverUrl(fragment), { params, warnings: [] });
+    assert.deepEqual(parseDiscoverUrl(fragment), { params: EVENT_LOG_PARAMS, warnings: [] });
   });
 
   it('parses a bare query string', () => {
     assert.deepEqual(parseDiscoverUrl('_g=(time:(from:now-1h,to:now))&_a=(hideChart:!t)'), {
-      params: { timeRange: { from: 'now-1h', to: 'now' }, hideChart: true },
+      params: { from: 'now-1h', to: 'now', hideChart: true },
       warnings: [],
     });
   });
@@ -42,20 +46,20 @@ describe('parseDiscoverUrl', () => {
   it('parses base paths, spaces, saved sessions, and search sessions', () => {
     const { params } = parseDiscoverUrl('https://kb.example.com/xyz/s/dev/app/discover#/view/abc?searchSessionId=s1');
     assert.deepEqual(params, {
-      kibanaUrl: 'https://kb.example.com/xyz',
-      spaceId: 'dev',
-      savedSearchId: 'abc',
-      searchSessionId: 's1',
+      kibana: 'https://kb.example.com/xyz',
+      space: 'dev',
+      savedSearch: 'abc',
+      session: 's1',
     });
   });
 
-  it('parses a URL without a hash', () => {
-    assert.deepEqual(parseDiscoverUrl(`${KIBANA_URL}/app/discover`).params, { kibanaUrl: KIBANA_URL });
+  it('omits the default Kibana URL', () => {
+    assert.deepEqual(parseDiscoverUrl(`${KIBANA_URL}/app/discover`).params, {});
   });
 
   it('parses ES|QL queries', () => {
-    const url = buildDiscoverUrl({ kibanaUrl: KIBANA_URL, esql: EVENT_LOG_ESQL });
-    assert.deepEqual(parseDiscoverUrl(url).params, { kibanaUrl: KIBANA_URL, esql: EVENT_LOG_ESQL });
+    const url = buildDiscoverUrl({ esql: EVENT_LOG_ESQL });
+    assert.deepEqual(parseDiscoverUrl(url).params, { esql: EVENT_LOG_ESQL });
   });
 
   it('drops filters from ES|QL URLs with a warning', () => {
@@ -68,14 +72,27 @@ describe('parseDiscoverUrl', () => {
 
   it('accepts the legacy index and flat sort forms', () => {
     const { params } = parseDiscoverUrl("#/?_a=(index:.kibana-event-log-ds,sort:!('@timestamp',asc))");
-    assert.deepEqual(params, { dataViewId: EVENT_LOG_DATA_VIEW, sort: [['@timestamp', 'asc']] });
+    assert.deepEqual(params, { dataView: EVENT_LOG_DATA_VIEW, sort: ['@timestamp:asc'] });
   });
 
   it('marks _g filters without $state as pinned', () => {
     const { params } = parseDiscoverUrl('#/?_g=(filters:!((meta:(key:a),query:(match_all:()))))');
     assert.deepEqual(params.filters, [
-      { meta: { key: 'a' }, query: { match_all: {} }, $state: { store: 'globalState' } },
+      { filterJson: { meta: { key: 'a' }, query: { match_all: {} }, $state: { store: 'globalState' } } },
     ]);
+  });
+
+  it('parses tabs, with a new tab as just the label', () => {
+    assert.deepEqual(parseDiscoverUrl("#/?_tab=(tabId:new,tabLabel:'Slow rules')").params, { tabLabel: 'Slow rules' });
+    assert.deepEqual(parseDiscoverUrl('#/?_tab=(tabId:new)').params, { tabId: 'new' });
+    assert.deepEqual(parseDiscoverUrl('#/?_tab=(tabId:t1,tabLabel:x)').params, { tabId: 't1', tabLabel: 'x' });
+  });
+
+  it('parses the refresh interval', () => {
+    const parse = (/** @type {string} */ state) => parseDiscoverUrl(`#/?_g=(refreshInterval:${state})`).params;
+    assert.deepEqual(parse('(pause:!t,value:60000)'), { refreshPaused: true });
+    assert.deepEqual(parse('(pause:!t,value:5000)'), { refresh: 5000, refreshPaused: true });
+    assert.deepEqual(parse('(pause:!f,value:60000)'), { refresh: 60000 });
   });
 
   it('warns about state it cannot represent', () => {
@@ -102,48 +119,48 @@ describe('parseDiscoverUrl', () => {
   });
 
   it('round-trips URLs built by buildDiscoverUrl', () => {
+    const index = EVENT_LOG_DATA_VIEW;
     const urls = [
       buildDiscoverUrl({
-        kibanaUrl: 'https://kb.example.com/xyz',
-        spaceId: 'dev',
-        savedSearchId: 'abc',
-        searchSessionId: 's1',
+        kibana: 'https://kb.example.com/xyz',
+        space: 'dev',
+        savedSearch: 'abc',
+        session: 's1',
+        tabId: 't1',
+        tabLabel: 'My tab',
         kql: 'message: "it\'s!"',
-        dataViewId: EVENT_LOG_DATA_VIEW,
-        timeRange: { from: '2026-10-30T00:00:00.000Z', to: 'now' },
-        refreshInterval: { pause: false, value: 5000 },
+        dataView: index,
+        from: '2026-10-30T00:00:00.000Z',
+        refresh: 5000,
         filters: [
-          phraseFilter('event.provider', 'alerting', { index: EVENT_LOG_DATA_VIEW, pinned: true }),
-          phraseFilter('kibana.alert.rule.execution.metrics.number_of_searches', 2),
-          existsFilter('error.message', { negate: true, disabled: true }),
-          customFilter({ query_string: { query: 'rule.name:*cpu*' } }),
+          { filterJson: phraseFilter('event.provider', 'alerting', { index, pinned: true }) },
+          { filterJson: phraseFilter('kibana.alert.rule.execution.metrics.number_of_searches', 2) },
+          { filterExists: '%^error.message' },
+          { filterDsl: '{"query_string":{"query":"rule.name:*cpu*"}}' },
         ],
         rowHeight: -1,
         density: 'compact',
-        expandedDoc: { id: 'd1', index: 'i1', routing: 'r1' },
+        docId: 'd1',
+        docIndex: 'i1',
+        docRouting: 'r1',
         profileState: { foo: 'bar' },
-        tab: { id: 't1', label: 'My tab' },
       }),
       buildDiscoverUrl({
-        kibanaUrl: KIBANA_URL,
-        dataViewId: EVENT_LOG_DATA_VIEW,
+        dataView: index,
         lucene: 'event.outcome:failure',
-        filters: [
-          phrasesFilter('event.action', ['execute', 'execute-start'], { index: EVENT_LOG_DATA_VIEW }),
-          rangeFilter('event.duration', { gte: 1e9, lt: 'x' }, { index: EVENT_LOG_DATA_VIEW }),
-        ],
-        columns: ['rule.name'],
-        sort: [['event.duration', 'desc'], ['@timestamp', 'asc']],
-        grid: { columns: { 'rule.name': { width: 300 } } },
         savedQuery: 'sq1',
+        filters: [{ filterIn: 'event.action=execute,execute-start' }, { filterRange: 'event.duration=1000000000..x' }],
+        columns: ['rule.name'],
+        sort: ['event.duration:desc', '@timestamp:asc'],
+        grid: { columns: { 'rule.name': { width: 300 } } },
         interval: 'h',
         viewMode: 'patterns',
         hideAggregatedPreview: true,
         hideTable: false,
         sampleSize: 500,
-        headerRowHeight: 2,
         rowsPerPage: 100,
-        documentsDisplayMode: 'table',
+        headerRowHeight: 2,
+        displayMode: 'table',
         esqlApproximation: false,
       }),
     ];
@@ -160,62 +177,100 @@ describe('paramsToArgs', () => {
     assert.deepEqual(paramsToArgs(EVENT_LOG_PARAMS), EVENT_LOG_ARGS);
   });
 
-  it('omits the default Kibana URL and refresh interval', () => {
-    assert.deepEqual(paramsToArgs({ kibanaUrl: KIBANA_URL, refreshInterval: { pause: true, value: 60000 } }), [
-      '--refresh-paused',
-    ]);
-    assert.deepEqual(paramsToArgs({ kibanaUrl: 'https://kb', refreshInterval: { pause: false, value: 60000 } }), [
-      '--kibana', 'https://kb',
-      '--refresh', '60000',
-    ]);
+  it('maps each param to its option', () => {
+    assert.deepEqual(
+      paramsToArgs({ hideChart: false, columns: ['a', 'b'], sort: ['a', 'b:asc'], grid: { x: 1 }, sampleSize: 10 }),
+      ['--columns', 'a,b', '--sort', 'a', '--sort', 'b:asc', '--grid', '{"x":1}', '--no-hide-chart', '--sample-size', '10']
+    );
   });
 
-  it('leaves out --tab-id new when the tab has a label', () => {
-    assert.deepEqual(paramsToArgs({ tab: { id: 'new', label: 'Slow rules' } }), ['--tab-label', 'Slow rules']);
-    assert.deepEqual(paramsToArgs({ tab: { id: 'new' } }), ['--tab-id', 'new']);
+  it('puts --filter-label before the filter it labels', () => {
+    assert.deepEqual(paramsToArgs({ filters: [{ filterExists: 'a', label: 'has a' }, { filter: 'b=c' }] }), [
+      '--filter-label', 'has a', '--filter-exists', 'a',
+      '--filter', 'b=c',
+    ]);
   });
 
   it('uses --name=value for values starting with "-"', () => {
     assert.deepEqual(paramsToArgs({ rowHeight: -1, kql: '-a' }), ['--kql=-a', '--row-height=-1']);
   });
 
-  it('uses the filter flags when they reproduce the filter exactly', () => {
+  it('puts the filters after --pin-filters, in order', () => {
+    assert.deepEqual(
+      paramsToArgs({
+        filters: [{ filterExists: 'a' }, { filter: 'b=c' }, { filterJson: existsFilter('d') }],
+        pinFilters: true,
+        from: 'now-1h',
+        columns: ['e'],
+      }),
+      [
+        '--from', 'now-1h',
+        '--pin-filters',
+        '--filter-exists', 'a',
+        '--filter', 'b=c',
+        '--filter-json', JSON.stringify(existsFilter('d')),
+        '--columns', 'e',
+      ]
+    );
+  });
+});
+
+describe('parseDiscoverUrl filters', () => {
+  /** @type {(filters: import('../discover-url.js').Filter[], dataView?: string) => import('../discover-url.js').DiscoverUrlParams} */
+  function parseFilters(filters, dataView) {
+    const url = buildDiscoverUrl({ dataView, filters: filters.map((filter) => ({ filterJson: filter })) });
+    return parseDiscoverUrl(url).params;
+  }
+
+  it('uses the filter options when they reproduce the filter exactly', () => {
     const index = EVENT_LOG_DATA_VIEW;
-    const args = paramsToArgs({
-      dataViewId: index,
-      filters: [
+    const { filters } = parseFilters(
+      [
         phraseFilter('event.action', 'execute', { index, negate: true }),
         phrasesFilter('event.outcome', ['failure', 'unknown'], { index, disabled: true }),
         rangeFilter('event.duration', { gte: 1000000000 }, { index }),
         existsFilter('error.message', { index, negate: true, disabled: true }),
         customFilter({ query_string: { query: 'rule.name:*cpu*' } }, { index }),
       ],
+      index
+    );
+    assert.deepEqual(filters, [
+      { filter: 'event.action!=execute' },
+      { filterIn: '%event.outcome=failure,unknown' },
+      { filterRange: 'event.duration=1000000000..' },
+      { filterExists: '%^error.message' },
+      { filterDsl: '{"query_string":{"query":"rule.name:*cpu*"}}' },
+    ]);
+  });
+
+  it('uses label for custom labels, and ignores the meta fields Kibana derives', () => {
+    const index = 'logs-*';
+    const labeled = phraseFilter('log.level', 'INFO', { index, alias: 'INFO', negate: true });
+    const fromEditor = { ...labeled, meta: { ...labeled.meta, field: 'log.level' } };
+    const custom = customFilter({ wildcard: { 'log.logger': 'plugins.reporting*' } }, { index, alias: 'Reporting' });
+    const reformatted = { ...custom, meta: { ...custom.meta, value: '{ "wildcard": {} }' } };
+    assert.deepEqual(parseFilters([fromEditor, reformatted], index).filters, [
+      { filter: 'log.level!=INFO', label: 'INFO' },
+      { filterDsl: '{"wildcard":{"log.logger":"plugins.reporting*"}}', label: 'Reporting' },
+    ]);
+  });
+
+  it('sets pinFilters when every filter is pinned', () => {
+    assert.deepEqual(parseFilters([existsFilter('error.message', { pinned: true })]), {
+      pinFilters: true,
+      filters: [{ filterExists: 'error.message' }],
     });
-    assert.deepEqual(args, [
-      '--data-view', index,
-      '--filter', 'event.action!=execute',
-      '--filter-in', '%event.outcome=failure,unknown',
-      '--filter-range', 'event.duration=1000000000..',
-      '--filter-exists', '%^error.message',
-      '--filter-dsl', '{"query_string":{"query":"rule.name:*cpu*"}}',
-    ]);
   });
 
-  it('adds --pin-filters when every filter is pinned', () => {
-    assert.deepEqual(paramsToArgs({ filters: [existsFilter('error.message', { pinned: true })] }), [
-      '--pin-filters',
-      '--filter-exists', 'error.message',
-    ]);
-  });
-
-  it('falls back to --filter-json when the filter flags cannot reproduce a filter', () => {
+  it('falls back to filterJson when the filter options cannot reproduce a filter, pinned filters first', () => {
     const pinned = phraseFilter('event.provider', 'alerting', { pinned: true });
     const numeric = phraseFilter('kibana.alert.rule.execution.metrics.number_of_searches', 2);
-    const aliased = existsFilter('error.message', { alias: 'has errors' });
-    assert.deepEqual(paramsToArgs({ filters: [pinned, numeric, aliased] }), [
-      '--filter-json', JSON.stringify(pinned),
-      '--filter-json', JSON.stringify(numeric),
-      '--filter-json', JSON.stringify(aliased),
+    const otherField = existsFilter('error.message');
+    const scripted = { ...otherField, meta: { ...otherField.meta, field: 'error' } };
+    assert.deepEqual(parseFilters([numeric, scripted, pinned]).filters, [
+      { filterJson: pinned },
+      { filterJson: numeric },
+      { filterJson: scripted },
     ]);
   });
 });

@@ -51,14 +51,32 @@ the shell is tedious; use `--parse -` to read the URL from stdin instead.
 
 See the [EXAMPLES.md][] file for an example.
 
-`--output json` prints the parameters object for `buildDiscoverUrl()`
-instead, which can be edited and passed back with `--params`:
+`--output json` prints the same options as JSON instead, which can be edited
+and passed back with `--params`, or used as the parameters of
+`buildDiscoverUrl()`.  The JSON keys are the option names in camelCase, in
+the same order as the command line:
 
     pbpaste | discover-url --parse - --output json > task-runs.json
     discover-url --params task-runs.json --from now-7d
 
-Filters that can't be expressed with the filter options (for example, a
-filter with a custom label) are printed as `--filter-json`, so nothing is lost.
+```json
+{
+  "kql": "",
+  "dataView": ".kibana-event-log-ds",
+  "from": "now-24h",
+  "to": "now",
+  "filters": [
+    {"filter":"event.provider=taskManager"},
+    {"filter":"%kibana.task.type!=alerting:.es-query"}
+  ],
+  "columns": ["kibana.task.type","kibana.task.schedule_delay"],
+  "breakdown": "kibana.task.type"
+}
+```
+
+Filters with a custom label are printed with `--filter-label`.  Filters that
+can't be expressed with the filter options (for example, a phrase filter on a
+number) are printed as `--filter-json`, so nothing is lost.
 URL state that `discover-url` doesn't support is reported as a warning on
 stderr.
 
@@ -73,14 +91,15 @@ usage
     connection:
       --kibana URL              Kibana base URL incl. base path ($KIBANA_URL, default http://localhost:5601)
       --space ID                Kibana space id
-      --params FILE             JSON file (or - for stdin) with DiscoverUrlParams; options override it
+      --params FILE             JSON file (or - for stdin) with the options (see JSON below); options
+                                override it, and filter options are added to its filters
       --open                    also open the URL in the browser
 
     parsing an existing URL:
       --parse URL               print the options for an existing Discover URL, #/... fragment,
                                 or _a=...&_g=... query string (- reads it from stdin)
       --output FORMAT           with --parse: args (command-line options, default) or
-                                json (the DiscoverUrlParams object for buildDiscoverUrl / --params)
+                                json (the same options as JSON, for --params or buildDiscoverUrl())
 
     query and data:
       --esql QUERY              ES|QL query (switches to ES|QL mode)
@@ -107,6 +126,8 @@ usage
       --filter-exists FIELD     "exists" filter
       --filter-dsl JSON         custom query DSL filter
       --filter-json JSON        raw Filter object or array of Filter objects (used as-is)
+      --filter-label LABEL      custom label for the next filter option, e.g.
+                                --filter-label Errors --filter-exists error.message
       --pin-filters             pin the filters given on the command line
 
       modifiers (any filter flag except --filter-json):
@@ -141,6 +162,15 @@ usage
 
       boolean options can be negated with --no-, e.g. --no-hide-chart writes hideChart:!f
 
+    JSON (--params, --output json, and buildDiscoverUrl()):
+      the options as camelCase keys, e.g. --data-view X --hide-sidebar is
+        {"dataView": "X", "hideSidebar": true}
+      --columns and --sort are arrays; --grid and --profile-state are objects
+      filters are an ordered array with one key per filter option, e.g.
+        "filters": [{"filter": "event.provider=alerting"}, {"filterExists": "^error.message"}]
+      with filterJson values as Filter objects instead of JSON strings, and --filter-label as a
+      label key on the filter it applies to, e.g. {"filterExists": "error.message", "label": "Errors"}
+
       -h, --help                show this help
 
 
@@ -153,18 +183,19 @@ using as a module
 import { buildDiscoverUrl } from 'discover-url';
 
 const url = buildDiscoverUrl({
-  kibanaUrl: 'http://localhost:5601',
-  tab: { label: 'Late task runs' },
-  timeRange: { from: 'now-1h', to: 'now' },
-  esql: `FROM .kibana-event-log-*
-    | WHERE event.provider == "taskManager" AND event.action == "task-run"
-    | EVAL delay_s = ROUND(kibana.task.schedule_delay / 1000000000.0, 3)
-    | WHERE delay_s > 60
-    | SORT delay_s DESC`,
-  columns: ['kibana.task.type', 'delay_s', 'error.message'],
-  breakdownField: 'kibana.task.type',
+  tabLabel: 'Late task runs',
+  kql: 'kibana.task.schedule_delay > 60000000000',
+  dataView: '.kibana-event-log-ds',
+  from: 'now-1h',
+  filters: [{ filter: 'event.provider=taskManager' }, { filter: 'event.action=task-run' }],
+  columns: ['kibana.task.type', 'kibana.task.schedule_delay', 'error.message'],
+  breakdown: 'kibana.task.type',
 });
 ```
+
+The parameters are the command-line options in camelCase (see the JSON
+section of the usage above), so `--parse URL --output json` prints them for an
+existing Discover URL.
 
 `const { buildDiscoverUrl } = require('discover-url')` works too.
 
@@ -186,14 +217,14 @@ from `file:` URLs.
   const { buildDiscoverUrl } = discoverUrl;
 
   document.getElementById('slow-rules').href = buildDiscoverUrl({
-    kibanaUrl: 'http://localhost:5601',
-    tab: { label: 'Slow rule runs' },
-    timeRange: { from: 'now-24h', to: 'now' },
-    esql: `FROM .kibana-event-log-*
-      | WHERE event.provider == "alerting" AND event.action == "execute"
-      | EVAL duration_s = ROUND(event.duration / 1000000000.0, 3)
-      | SORT duration_s DESC`,
-    columns: ['rule.name', 'duration_s'],
+    kibana: 'https://my-kibana.example.com',
+    tabLabel: 'Slow rule runs',
+    kql: 'event.duration > 10000000000',
+    dataView: '.kibana-event-log-ds',
+    from: 'now-24h',
+    filters: [{ filter: 'event.provider=alerting' }, { filter: 'event.action=execute' }],
+    columns: ['rule.name', 'event.duration'],
+    sort: ['event.duration:desc'],
   });
 </script>
 ```
@@ -216,12 +247,18 @@ from `file:` URLs.
 | `DEFAULT_KIBANA_URL`                         | `http://localhost:5601`
 | `NEW_TAB_ID`                                 | `new`, the tab id that opens a new Discover tab
 
-The filter `options` are `negate`, `disabled`, `pinned`, `alias` (a custom
-label for the pill), and `index` (the data view id).  Filter pills only work
-with KQL and Lucene queries; Discover ignores them in ES|QL mode, so
-`buildDiscoverUrl()` throws an error when they're combined with `esql`, and
-`parseDiscoverUrl()` drops them with a warning.  See the `DiscoverUrlParams`
-type at the bottom of `discover-url.js` for all the parameters.
+The `filters` parameter takes the filter options, like
+`{ filter: 'event.provider=alerting' }` or
+`{ filterExists: '^error.message', label: 'no errors' }`, or Filter objects
+built by the filter functions, like
+`{ filterJson: phraseFilter('event.provider', 'alerting', { alias: 'alerting' }) }`.
+The filter function `options` are `negate`, `disabled`, `pinned`, `alias` (a
+custom label for the pill), and `index` (the data view id; the filter options
+use `dataView`).  Filter pills only work with KQL and Lucene queries; Discover
+ignores them in ES|QL mode, so `buildDiscoverUrl()` throws an error when
+they're combined with `esql`, and `parseDiscoverUrl()` drops them with a
+warning.  See the `DiscoverUrlParams` type at the bottom of `discover-url.js`
+for all the parameters.
 
 [rison]: https://github.com/Nanonid/rison
 
@@ -239,11 +276,26 @@ which uses the Node.js test runner.  There are no dependencies to install.
 change log
 ================================================================================
 
-#### 2026-10-31 - 1.2.0
+#### 2026-10-31 - 2.0.0
 
-- `discover-url.js` is now a CommonJS file, so web pages opened from `file:`
-  URLs can load it with `<script src>`; it adds a `discoverUrl` global.  Web
-  pages can no longer load it with `import`.
+- breaking: the `buildDiscoverUrl()` parameters, `parseDiscoverUrl()` params,
+  and `--params` / `--output json` JSON are now the command-line options in
+  camelCase and command-line order, e.g. `kibana`, `space`, `tabLabel`,
+  `from` / `to`, `refresh` / `refreshPaused`, `breakdown`, and `sort` as
+  `"field:dir"` strings
+- breaking: `filters` are the filter options, e.g. `{ filter: 'a=b' }`, with
+  Filter objects as `{ filterJson: filter }`; `pinFilters` pins them, and they
+  get their data view from `dataView`
+- breaking: the `query` parameter is removed; use `esql`, `kql`, or `lucene`
+- `--filter-label` (`label` in JSON) sets a filter's custom label, so
+  `--parse` no longer falls back to `--filter-json` for labeled filters
+- `--parse` ignores the `meta.field` and `meta.value` fields Kibana's filter
+  editor adds, so filters created in Discover print as filter options
+- unknown parameters are an error
+- filter options on the command line are added to the `--params` filters
+- breaking: `discover-url.js` is now a CommonJS file, so web pages opened from
+  `file:` URLs can load it with `<script src>`; it adds a `discoverUrl`
+  global.  Web pages can no longer load it with `import`.
 
 #### 2026-10-31 - 1.1.0
 

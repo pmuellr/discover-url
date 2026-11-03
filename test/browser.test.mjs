@@ -31,8 +31,8 @@ describe('discover-url.js as a <script src>', () => {
     const { discoverUrl } = loadAsScript();
     const { buildDiscoverUrl } = /** @type {typeof discoverUrlModule} */ (discoverUrl);
     assert.equal(
-      buildDiscoverUrl({ kibanaUrl: 'http://localhost:5601', tab: { label: 'x' } }),
-      discoverUrlModule.buildDiscoverUrl({ kibanaUrl: 'http://localhost:5601', tab: { label: 'x' } })
+      buildDiscoverUrl({ tabLabel: 'x', filters: [{ filter: 'a=b' }] }),
+      discoverUrlModule.buildDiscoverUrl({ tabLabel: 'x', filters: [{ filter: 'a=b' }] })
     );
   });
 });

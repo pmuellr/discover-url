@@ -29,108 +29,11 @@ const NEW_TAB_ID = 'new';
 // ---------------------------------------------------------------------------
 
 /**
- * Build a Discover URL from the given parameters.
+ * Build a Discover URL from the given parameters (the command-line options, in camelCase).
  * @type {(params?: DiscoverUrlParams) => string}
  */
 function buildDiscoverUrl(params = {}) {
-  const {
-    kibanaUrl = defaultKibanaUrl(),
-    spaceId,
-    savedSearchId,
-    searchSessionId,
-    tab,
-    dataViewId,
-    timeRange,
-    refreshInterval,
-    filters = [],
-    columns,
-    sort,
-    grid,
-    savedQuery,
-    interval,
-    viewMode,
-    hideAggregatedPreview,
-    breakdownField,
-    hideChart,
-    hideTable,
-    hideSidebar,
-    sampleSize,
-    rowHeight,
-    headerRowHeight,
-    rowsPerPage,
-    density,
-    documentsDisplayMode,
-    esqlApproximation,
-    expandedDoc,
-    profileState,
-  } = params;
-
-  const query = resolveQuery(params);
-  const isEsql = query !== undefined && 'esql' in query;
-  if (isEsql && filters.length) throw new Error(ESQL_FILTERS_ERROR);
-
-  /** @type {RisonValue} */
-  let dataSource;
-  if (isEsql) dataSource = { type: 'esql' };
-  else if (dataViewId) dataSource = { type: 'dataView', dataViewId };
-
-  const appFilters = filters.filter((filter) => !isPinned(filter));
-  const globalFilters = filters.filter(isPinned);
-
-  const globalState = compact({
-    time: timeRange ? { ...timeRange } : undefined,
-    refreshInterval: refreshInterval ? { ...refreshInterval } : undefined,
-    filters: globalFilters.length ? globalFilters : undefined,
-  });
-
-  const appState = compact({
-    query: query ? { ...query } : undefined,
-    dataSource,
-    filters: appFilters.length ? appFilters : undefined,
-    columns,
-    sort,
-    grid,
-    savedQuery,
-    interval,
-    viewMode,
-    hideAggregatedPreview,
-    breakdownField,
-    hideChart,
-    hideTable,
-    hideSidebar,
-    sampleSize: sampleSize && sampleSize > 0 ? sampleSize : undefined,
-    rowHeight,
-    headerRowHeight,
-    rowsPerPage,
-    density,
-    documentsDisplayMode,
-    esqlApproximation,
-    expandedDoc: expandedDoc ? compact({ ...expandedDoc }) : undefined,
-  });
-
-  /** @type {string[]} */
-  const queryParts = [];
-  if (searchSessionId) queryParts.push(`searchSessionId=${encodeUriQuery(searchSessionId)}`);
-
-  /** @type {Array<[string, RisonObject | undefined]>} */
-  const states = [
-    ['_tab', tab ? compact({ tabId: tab.id ?? NEW_TAB_ID, tabLabel: tab.label }) : undefined],
-    ['_g', globalState],
-    ['_a', appState],
-    ['_p', profileState],
-  ];
-  for (const [key, state] of states) {
-    if (!state || !Object.keys(state).length) continue;
-    const encoded = risonEncode(state);
-    if (encoded !== undefined) queryParts.push(`${key}=${encodeUriQuery(encoded)}`);
-  }
-
-  const base = kibanaUrl.replace(/\/+$/, '');
-  const spacePath = spaceId && spaceId !== 'default' ? `/s/${encodeURIComponent(spaceId)}` : '';
-  const viewPath = savedSearchId ? `view/${encodeURIComponent(savedSearchId)}` : '';
-  const search = queryParts.length ? `?${queryParts.join('&')}` : '';
-
-  return `${base}${spacePath}/app/discover#/${viewPath}${search}`;
+  return urlFromState(stateFromParams(params));
 }
 
 /**
@@ -138,83 +41,8 @@ function buildDiscoverUrl(params = {}) {
  * @type {(url: string) => ParsedDiscoverUrl}
  */
 function parseDiscoverUrl(url) {
-  /** @type {DiscoverUrlParams} */
-  const params = {};
-  /** @type {string[]} */
-  const warnings = [];
-
-  const input = url.trim();
-  const hashIndex = input.indexOf('#');
-  let pathPart = '';
-  let hash = input;
-  if (hashIndex >= 0) {
-    pathPart = input.slice(0, hashIndex);
-    hash = input.slice(hashIndex + 1);
-  } else if (/\/app\/discover\/?$/.test(input)) {
-    pathPart = input;
-    hash = '';
-  }
-
-  if (pathPart) {
-    const match = /^(.*?)(?:\/s\/([^/]+))?\/app\/discover\/?$/.exec(pathPart);
-    if (match) {
-      const [, base, space] = match;
-      if (base) params.kibanaUrl = base;
-      if (space && space !== 'default') params.spaceId = decodeURIComponent(space);
-    } else {
-      warnings.push(`unrecognized URL path "${pathPart}"`);
-    }
-  }
-
-  let route = hash.replace(/^\/+/, '');
-  let search = '';
-  const questionIndex = route.indexOf('?');
-  if (questionIndex >= 0) {
-    search = route.slice(questionIndex + 1);
-    route = route.slice(0, questionIndex);
-  } else if (route.includes('=')) {
-    search = route;
-    route = '';
-  }
-
-  const viewMatch = /^view\/([^/]+)\/?$/.exec(route);
-  if (viewMatch) params.savedSearchId = decodeURIComponent(viewMatch[1]);
-  else if (route) warnings.push(`unrecognized Discover route "${route}"`);
-
-  for (const part of search.split('&')) {
-    if (!part) continue;
-    const equalsIndex = part.indexOf('=');
-    const key = equalsIndex < 0 ? part : part.slice(0, equalsIndex);
-    const value = decodeQueryValue(equalsIndex < 0 ? '' : part.slice(equalsIndex + 1));
-    switch (key) {
-      case 'searchSessionId':
-        params.searchSessionId = value;
-        break;
-      case '_g':
-        applyGlobalState(params, decodeUrlState(key, value, warnings), warnings);
-        break;
-      case '_a':
-        applyAppState(params, decodeUrlState(key, value, warnings), warnings);
-        break;
-      case '_p': {
-        const profileState = decodeUrlState(key, value, warnings);
-        if (Object.keys(profileState).length) params.profileState = profileState;
-        break;
-      }
-      case '_tab':
-        applyTabState(params, decodeUrlState(key, value, warnings), warnings);
-        break;
-      default:
-        warnings.push(`ignored URL parameter "${key}"`);
-    }
-  }
-
-  if (params.esql !== undefined && params.filters) {
-    warnings.push('ignored filters (Discover ignores them in ES|QL mode)');
-    delete params.filters;
-  }
-
-  return { params, warnings };
+  const { state, warnings } = parseUrlState(url);
+  return { params: paramsFromState(state), warnings };
 }
 
 /**
@@ -395,17 +223,117 @@ async function main(args = process.argv.slice(2)) {
 const ESQL_FILTERS_ERROR =
   'filters can not be used with an ES|QL query (Discover ignores them); use a WHERE command in the query instead';
 
-/** @type {(params: DiscoverUrlParams) => DiscoverQuery | undefined} */
-function resolveQuery(params) {
-  const { esql, kql, lucene, query } = params;
-  const provided = [esql, kql, lucene, query].filter((value) => value !== undefined);
-  if (provided.length > 1) {
-    throw new Error('only one of esql, kql, lucene, or query may be specified');
+/** @type {(state: UrlState) => string} */
+function urlFromState(state) {
+  const {
+    kibanaUrl = defaultKibanaUrl(),
+    spaceId,
+    savedSearchId,
+    searchSessionId,
+    tab,
+    dataViewId,
+    timeRange,
+    refreshInterval,
+    filters = [],
+    columns,
+    sort,
+    grid,
+    savedQuery,
+    interval,
+    viewMode,
+    hideAggregatedPreview,
+    breakdownField,
+    hideChart,
+    hideTable,
+    hideSidebar,
+    sampleSize,
+    rowHeight,
+    headerRowHeight,
+    rowsPerPage,
+    density,
+    documentsDisplayMode,
+    esqlApproximation,
+    expandedDoc,
+    profileState,
+  } = state;
+
+  const query = resolveQuery(state);
+  const isEsql = query !== undefined && 'esql' in query;
+  if (isEsql && filters.length) throw new Error(ESQL_FILTERS_ERROR);
+
+  /** @type {RisonValue} */
+  let dataSource;
+  if (isEsql) dataSource = { type: 'esql' };
+  else if (dataViewId) dataSource = { type: 'dataView', dataViewId };
+
+  const appFilters = filters.filter((filter) => !isPinned(filter));
+  const globalFilters = filters.filter(isPinned);
+
+  const globalState = compact({
+    time: timeRange ? { ...timeRange } : undefined,
+    refreshInterval: refreshInterval ? { ...refreshInterval } : undefined,
+    filters: globalFilters.length ? globalFilters : undefined,
+  });
+
+  const appState = compact({
+    query: query ? { ...query } : undefined,
+    dataSource,
+    filters: appFilters.length ? appFilters : undefined,
+    columns,
+    sort,
+    grid,
+    savedQuery,
+    interval,
+    viewMode,
+    hideAggregatedPreview,
+    breakdownField,
+    hideChart,
+    hideTable,
+    hideSidebar,
+    sampleSize: sampleSize && sampleSize > 0 ? sampleSize : undefined,
+    rowHeight,
+    headerRowHeight,
+    rowsPerPage,
+    density,
+    documentsDisplayMode,
+    esqlApproximation,
+    expandedDoc: expandedDoc ? compact({ ...expandedDoc }) : undefined,
+  });
+
+  /** @type {string[]} */
+  const queryParts = [];
+  if (searchSessionId) queryParts.push(`searchSessionId=${encodeUriQuery(searchSessionId)}`);
+
+  /** @type {Array<[string, RisonObject | undefined]>} */
+  const states = [
+    ['_tab', tab ? compact({ tabId: tab.id ?? NEW_TAB_ID, tabLabel: tab.label }) : undefined],
+    ['_g', globalState],
+    ['_a', appState],
+    ['_p', profileState],
+  ];
+  for (const [key, state] of states) {
+    if (!state || !Object.keys(state).length) continue;
+    const encoded = risonEncode(state);
+    if (encoded !== undefined) queryParts.push(`${key}=${encodeUriQuery(encoded)}`);
   }
+
+  const base = kibanaUrl.replace(/\/+$/, '');
+  const spacePath = spaceId && spaceId !== 'default' ? `/s/${encodeURIComponent(spaceId)}` : '';
+  const viewPath = savedSearchId ? `view/${encodeURIComponent(savedSearchId)}` : '';
+  const search = queryParts.length ? `?${queryParts.join('&')}` : '';
+
+  return `${base}${spacePath}/app/discover#/${viewPath}${search}`;
+}
+
+/** @type {(params: UrlState) => DiscoverQuery | undefined} */
+function resolveQuery(params) {
+  const { esql, kql, lucene } = params;
+  const provided = [esql, kql, lucene].filter((value) => value !== undefined);
+  if (provided.length > 1) throw new Error('only one of esql, kql, or lucene may be specified');
   if (esql !== undefined) return { esql };
   if (kql !== undefined) return { language: 'kuery', query: kql };
   if (lucene !== undefined) return { language: 'lucene', query: lucene };
-  return query;
+  return undefined;
 }
 
 /** @type {(record: RisonObject) => RisonObject} */
@@ -426,6 +354,87 @@ function defaultKibanaUrl() {
 // ---------------------------------------------------------------------------
 // url parser helpers
 // ---------------------------------------------------------------------------
+
+/** @type {(url: string) => { state: UrlState; warnings: string[] }} */
+function parseUrlState(url) {
+  /** @type {UrlState} */
+  const state = {};
+  /** @type {string[]} */
+  const warnings = [];
+
+  const input = url.trim();
+  const hashIndex = input.indexOf('#');
+  let pathPart = '';
+  let hash = input;
+  if (hashIndex >= 0) {
+    pathPart = input.slice(0, hashIndex);
+    hash = input.slice(hashIndex + 1);
+  } else if (/\/app\/discover\/?$/.test(input)) {
+    pathPart = input;
+    hash = '';
+  }
+
+  if (pathPart) {
+    const match = /^(.*?)(?:\/s\/([^/]+))?\/app\/discover\/?$/.exec(pathPart);
+    if (match) {
+      const [, base, space] = match;
+      if (base) state.kibanaUrl = base;
+      if (space && space !== 'default') state.spaceId = decodeURIComponent(space);
+    } else {
+      warnings.push(`unrecognized URL path "${pathPart}"`);
+    }
+  }
+
+  let route = hash.replace(/^\/+/, '');
+  let search = '';
+  const questionIndex = route.indexOf('?');
+  if (questionIndex >= 0) {
+    search = route.slice(questionIndex + 1);
+    route = route.slice(0, questionIndex);
+  } else if (route.includes('=')) {
+    search = route;
+    route = '';
+  }
+
+  const viewMatch = /^view\/([^/]+)\/?$/.exec(route);
+  if (viewMatch) state.savedSearchId = decodeURIComponent(viewMatch[1]);
+  else if (route) warnings.push(`unrecognized Discover route "${route}"`);
+
+  for (const part of search.split('&')) {
+    if (!part) continue;
+    const equalsIndex = part.indexOf('=');
+    const key = equalsIndex < 0 ? part : part.slice(0, equalsIndex);
+    const value = decodeQueryValue(equalsIndex < 0 ? '' : part.slice(equalsIndex + 1));
+    switch (key) {
+      case 'searchSessionId':
+        state.searchSessionId = value;
+        break;
+      case '_g':
+        applyGlobalState(state, decodeUrlState(key, value, warnings), warnings);
+        break;
+      case '_a':
+        applyAppState(state, decodeUrlState(key, value, warnings), warnings);
+        break;
+      case '_p': {
+        const profileState = decodeUrlState(key, value, warnings);
+        if (Object.keys(profileState).length) state.profileState = profileState;
+        break;
+      }
+      case '_tab':
+        applyTabState(state, decodeUrlState(key, value, warnings), warnings);
+        break;
+      default:
+        warnings.push(`ignored URL parameter "${key}"`);
+    }
+  }
+
+  if (state.esql !== undefined && state.filters) {
+    warnings.push('ignored filters (Discover ignores them in ES|QL mode)');
+    delete state.filters;
+  }
+
+  return { state, warnings };
+}
 
 const VIEW_MODES = /** @type {const} */ (['documents', 'patterns', 'aggregated']);
 const DENSITIES = /** @type {const} */ (['compact', 'normal', 'expanded']);
@@ -512,7 +521,7 @@ function decodeSort(value) {
   return sort;
 }
 
-/** @type {(params: DiscoverUrlParams, state: RisonObject, warnings: string[]) => void} */
+/** @type {(params: UrlState, state: RisonObject, warnings: string[]) => void} */
 function applyGlobalState(params, state, warnings) {
   for (const [key, value] of Object.entries(state)) {
     const label = `_g.${key}`;
@@ -546,7 +555,7 @@ function applyGlobalState(params, state, warnings) {
   }
 }
 
-/** @type {(params: DiscoverUrlParams, state: RisonObject, warnings: string[]) => void} */
+/** @type {(params: UrlState, state: RisonObject, warnings: string[]) => void} */
 function applyAppState(params, state, warnings) {
   for (const [key, value] of Object.entries(state)) {
     const label = `_a.${key}`;
@@ -642,7 +651,7 @@ function applyAppState(params, state, warnings) {
   }
 }
 
-/** @type {(params: DiscoverUrlParams, state: RisonObject, warnings: string[]) => void} */
+/** @type {(params: UrlState, state: RisonObject, warnings: string[]) => void} */
 function applyTabState(params, state, warnings) {
   const { tabId, tabLabel } = state;
   if (typeof tabId !== 'string') {
@@ -653,13 +662,166 @@ function applyTabState(params, state, warnings) {
 }
 
 // ---------------------------------------------------------------------------
-// params to command-line arguments
+// params: conversions between DiscoverUrlParams, URL state, and command-line arguments
 // ---------------------------------------------------------------------------
 
 const DEFAULT_REFRESH_INTERVAL = 60000;
 
-/** @type {(params: DiscoverUrlParams) => string[][]} */
-function paramsToArgGroups(params) {
+/**
+ * The command-line options that are DiscoverUrlParams (as camelCase keys), in command-line order.
+ * `filters` follows `pin-filters`.
+ */
+const PARAM_OPTIONS = /** @type {const} */ ({
+  kibana: 'string',
+  space: 'string',
+  'saved-search': 'string',
+  session: 'string',
+  'tab-id': 'string',
+  'tab-label': 'string',
+  esql: 'string',
+  kql: 'string',
+  lucene: 'string',
+  'data-view': 'string',
+  'saved-query': 'string',
+  from: 'string',
+  to: 'string',
+  refresh: 'integer',
+  'refresh-paused': 'boolean',
+  'pin-filters': 'boolean',
+  columns: 'list',
+  sort: 'strings',
+  grid: 'json',
+  interval: 'string',
+  breakdown: 'string',
+  'view-mode': 'string',
+  'hide-aggregated-preview': 'boolean',
+  'hide-chart': 'boolean',
+  'hide-table': 'boolean',
+  'hide-sidebar': 'boolean',
+  'sample-size': 'integer',
+  'rows-per-page': 'integer',
+  'row-height': 'integer',
+  'header-row-height': 'integer',
+  density: 'string',
+  'display-mode': 'string',
+  'esql-approximation': 'boolean',
+  'doc-id': 'string',
+  'doc-index': 'string',
+  'doc-routing': 'string',
+  'profile-state': 'json',
+});
+
+const PARAM_KEYS = [...Object.keys(PARAM_OPTIONS).map(camelCase), 'filters'];
+
+/** @type {(name: string) => string} */
+function camelCase(name) {
+  return name.replace(/-([a-z])/g, (_, char) => char.toUpperCase());
+}
+
+/** @type {(key: string) => string} */
+function kebabCase(key) {
+  return key.replace(/[A-Z]/g, (char) => `-${char.toLowerCase()}`);
+}
+
+/** @type {(params: DiscoverUrlParams) => UrlState} */
+function stateFromParams(params) {
+  const unknown = Object.keys(params).filter((key) => !PARAM_KEYS.includes(key));
+  if (unknown.length) throw new Error(`unknown parameter "${unknown.join('", "')}"`);
+
+  const {
+    kibana,
+    space,
+    savedSearch,
+    session,
+    tabId,
+    tabLabel,
+    esql,
+    kql,
+    lucene,
+    dataView,
+    savedQuery,
+    from,
+    to,
+    refresh,
+    refreshPaused,
+    pinFilters = false,
+    filters = [],
+    columns,
+    sort,
+    grid,
+    interval,
+    breakdown,
+    viewMode,
+    hideAggregatedPreview,
+    hideChart,
+    hideTable,
+    hideSidebar,
+    sampleSize,
+    rowsPerPage,
+    rowHeight,
+    headerRowHeight,
+    density,
+    displayMode,
+    esqlApproximation,
+    docId,
+    docIndex,
+    docRouting,
+    profileState,
+  } = params;
+
+  if ((docId === undefined) !== (docIndex === undefined)) {
+    throw new Error('--doc-id and --doc-index must be used together');
+  }
+
+  /** @type {FilterOptions} */
+  const common = { pinned: pinFilters, index: dataView };
+  const noTime = from === undefined && to === undefined;
+  const noRefresh = refresh === undefined && refreshPaused === undefined;
+
+  return {
+    kibanaUrl: kibana,
+    spaceId: space,
+    savedSearchId: savedSearch,
+    searchSessionId: session,
+    tab:
+      tabId === undefined && tabLabel === undefined ? undefined : { id: tabId ?? NEW_TAB_ID, label: tabLabel },
+    esql,
+    kql,
+    lucene,
+    dataViewId: dataView,
+    savedQuery,
+    timeRange: noTime ? undefined : { from: from ?? 'now-15m', to: to ?? 'now' },
+    refreshInterval: noRefresh
+      ? undefined
+      : { pause: refreshPaused ?? false, value: refresh ?? DEFAULT_REFRESH_INTERVAL },
+    filters: filters.flatMap((entry) => filtersFromParam(entry, common)),
+    columns,
+    sort: sort?.map(parseSort),
+    grid,
+    interval,
+    breakdownField: breakdown,
+    viewMode: parseChoice('view-mode', viewMode, VIEW_MODES),
+    hideAggregatedPreview,
+    hideChart,
+    hideTable,
+    hideSidebar,
+    sampleSize,
+    rowsPerPage,
+    rowHeight,
+    headerRowHeight,
+    density: parseChoice('density', density, DENSITIES),
+    documentsDisplayMode: parseChoice('display-mode', displayMode, DISPLAY_MODES),
+    esqlApproximation,
+    expandedDoc:
+      docId === undefined || docIndex === undefined
+        ? undefined
+        : { id: docId, index: docIndex, routing: docRouting },
+    profileState,
+  };
+}
+
+/** @type {(state: UrlState) => DiscoverUrlParams} */
+function paramsFromState(state) {
   const {
     kibanaUrl,
     spaceId,
@@ -672,7 +834,7 @@ function paramsToArgGroups(params) {
     refreshInterval,
     filters = [],
     columns,
-    sort = [],
+    sort,
     grid,
     interval,
     breakdownField,
@@ -690,81 +852,92 @@ function paramsToArgGroups(params) {
     esqlApproximation,
     expandedDoc,
     profileState,
-  } = params;
+  } = state;
 
+  const query = resolveQuery(state);
+  const pinFilters = filters.length > 0 && filters.every(isPinned);
+  /** @type {FilterOptions} */
+  const common = { pinned: pinFilters, index: dataViewId };
+  const { pause, value: refreshValue } = refreshInterval ?? {};
+
+  /** @type {DiscoverUrlParams} */
+  const params = {
+    kibana: kibanaUrl === DEFAULT_KIBANA_URL ? undefined : kibanaUrl,
+    space: spaceId,
+    savedSearch: savedSearchId,
+    session: searchSessionId,
+    tabId: tab?.label !== undefined && tab.id === NEW_TAB_ID ? undefined : tab?.id,
+    tabLabel: tab?.label,
+    esql: query && 'esql' in query ? query.esql : undefined,
+    kql: query && 'language' in query && query.language === 'kuery' ? query.query : undefined,
+    lucene: query && 'language' in query && query.language === 'lucene' ? query.query : undefined,
+    dataView: dataViewId,
+    savedQuery,
+    from: timeRange?.from,
+    to: timeRange?.to,
+    refresh: refreshInterval && (!pause || refreshValue !== DEFAULT_REFRESH_INTERVAL) ? refreshValue : undefined,
+    refreshPaused: pause || undefined,
+    pinFilters: pinFilters || undefined,
+    filters: filters.length ? filters.map((filter) => filterToParam(filter, common)) : undefined,
+    columns: columns?.length ? columns : undefined,
+    sort: sort?.length ? sort.map(([field, direction]) => `${field}:${direction}`) : undefined,
+    grid,
+    interval,
+    breakdown: breakdownField,
+    viewMode,
+    hideAggregatedPreview,
+    hideChart,
+    hideTable,
+    hideSidebar,
+    sampleSize,
+    rowsPerPage,
+    rowHeight,
+    headerRowHeight,
+    density,
+    displayMode: documentsDisplayMode,
+    esqlApproximation,
+    docId: expandedDoc?.id,
+    docIndex: expandedDoc?.index,
+    docRouting: expandedDoc?.routing,
+    profileState: profileState && Object.keys(profileState).length ? profileState : undefined,
+  };
+  return withoutUndefined(params);
+}
+
+/** @type {<T extends object>(record: T) => T} */
+function withoutUndefined(record) {
+  return /** @type {typeof record} */ (
+    Object.fromEntries(Object.entries(record).filter(([, value]) => value !== undefined))
+  );
+}
+
+/** @type {(params: DiscoverUrlParams) => string[][]} */
+function paramsToArgGroups(params) {
+  const record = /** @type {Record<string, unknown>} */ (params);
   /** @type {string[][]} */
   const groups = [];
-  if (kibanaUrl !== DEFAULT_KIBANA_URL) addOption(groups, 'kibana', kibanaUrl);
-  addOption(groups, 'space', spaceId);
-  addOption(groups, 'saved-search', savedSearchId);
-  addOption(groups, 'session', searchSessionId);
-  if (tab?.label === undefined || tab.id !== NEW_TAB_ID) addOption(groups, 'tab-id', tab?.id);
-  addOption(groups, 'tab-label', tab?.label);
-
-  const query = resolveQuery(params);
-  if (query !== undefined) {
-    if ('esql' in query) addOption(groups, 'esql', query.esql);
-    else addOption(groups, query.language === 'kuery' ? 'kql' : 'lucene', query.query);
-  }
-  addOption(groups, 'data-view', dataViewId);
-  addOption(groups, 'saved-query', savedQuery);
-  addOption(groups, 'from', timeRange?.from);
-  addOption(groups, 'to', timeRange?.to);
-  if (refreshInterval) {
-    const { pause, value } = refreshInterval;
-    if (pause) groups.push(['--refresh-paused']);
-    if (!pause || value !== DEFAULT_REFRESH_INTERVAL) addOption(groups, 'refresh', String(value));
-  }
-
-  /** @type {FilterOptions} */
-  const common = {
-    pinned: filters.length > 0 && filters.every(isPinned),
-    index: dataViewId,
-  };
-  if (common.pinned) groups.push(['--pin-filters']);
-  for (const filter of filters) groups.push(filterToArgGroup(filter, common));
-
-  if (columns?.length) addOption(groups, 'columns', columns.join(','));
-  for (const [field, direction] of sort) addOption(groups, 'sort', `${field}:${direction}`);
-  if (grid) addOption(groups, 'grid', JSON.stringify(grid));
-  addOption(groups, 'interval', interval);
-  addOption(groups, 'breakdown', breakdownField);
-  addOption(groups, 'view-mode', viewMode);
-  addBoolean(groups, 'hide-aggregated-preview', hideAggregatedPreview);
-  addBoolean(groups, 'hide-chart', hideChart);
-  addBoolean(groups, 'hide-table', hideTable);
-  addBoolean(groups, 'hide-sidebar', hideSidebar);
-  addNumber(groups, 'sample-size', sampleSize);
-  addNumber(groups, 'rows-per-page', rowsPerPage);
-  addNumber(groups, 'row-height', rowHeight);
-  addNumber(groups, 'header-row-height', headerRowHeight);
-  addOption(groups, 'density', density);
-  addOption(groups, 'display-mode', documentsDisplayMode);
-  addBoolean(groups, 'esql-approximation', esqlApproximation);
-  addOption(groups, 'doc-id', expandedDoc?.id);
-  addOption(groups, 'doc-index', expandedDoc?.index);
-  addOption(groups, 'doc-routing', expandedDoc?.routing);
-  if (profileState && Object.keys(profileState).length) {
-    addOption(groups, 'profile-state', JSON.stringify(profileState));
+  for (const [name, kind] of Object.entries(PARAM_OPTIONS)) {
+    groups.push(...paramToArgGroups(name, kind, record[camelCase(name)]));
+    if (name === 'pin-filters') groups.push(...(params.filters ?? []).map(filterParamToArgGroup));
   }
   return groups;
 }
 
-/** @type {(groups: string[][], name: string, value: string | undefined) => void} */
-function addOption(groups, name, value) {
-  if (value === undefined) return;
-  groups.push(optionGroup(name, value));
-}
-
-/** @type {(groups: string[][], name: string, value: number | undefined) => void} */
-function addNumber(groups, name, value) {
-  addOption(groups, name, value === undefined ? undefined : String(value));
-}
-
-/** @type {(groups: string[][], name: string, value: boolean | undefined) => void} */
-function addBoolean(groups, name, value) {
-  if (value === undefined) return;
-  groups.push([value ? `--${name}` : `--no-${name}`]);
+/** @type {(name: string, kind: ParamKind, value: unknown) => string[][]} */
+function paramToArgGroups(name, kind, value) {
+  if (value === undefined) return [];
+  switch (kind) {
+    case 'boolean':
+      return [[value ? `--${name}` : `--no-${name}`]];
+    case 'list':
+      return Array.isArray(value) && value.length ? [optionGroup(name, value.join(','))] : [];
+    case 'strings':
+      return Array.isArray(value) ? value.map((item) => optionGroup(name, String(item))) : [];
+    case 'json':
+      return [optionGroup(name, JSON.stringify(value))];
+    default:
+      return [optionGroup(name, String(value))];
+  }
 }
 
 /** @type {(name: string, value: string) => string[]} */
@@ -773,22 +946,63 @@ function optionGroup(name, value) {
   return value.startsWith('-') ? [`--${name}=${value}`] : [`--${name}`, value];
 }
 
-/** @type {(filter: Filter, common: FilterOptions) => string[]} */
-function filterToArgGroup(filter, common) {
-  const jsonGroup = ['--filter-json', JSON.stringify(filter)];
+/** @type {(entry: FilterParam) => string[]} */
+function filterParamToArgGroup(entry) {
+  const { label, ...rest } = /** @type {FilterParam & { label?: string }} */ (entry);
+  const [[key, value]] = Object.entries(rest);
+  const name = kebabCase(key);
+  const filterGroup = typeof value === 'string' ? optionGroup(name, value) : [`--${name}`, JSON.stringify(value)];
+  return label === undefined ? filterGroup : [...optionGroup('filter-label', label), ...filterGroup];
+}
+
+/** @type {(filter: Filter, common: FilterOptions) => FilterParam} */
+function filterToParam(filter, common) {
+  const jsonParam = { filterJson: filter };
   const candidate = filterArgCandidate(filter);
-  if (!candidate) return jsonGroup;
+  if (!candidate) return jsonParam;
 
   const [name, text] = candidate;
+  const { alias } = filter.meta;
+  const label = typeof alias === 'string' ? alias : undefined;
   /** @type {Filter[]} */
   let rebuilt;
   try {
-    rebuilt = filterFromArg(name, text, common);
+    rebuilt = filterFromArg(name, text, { ...common, alias: label });
   } catch {
-    return jsonGroup;
+    return jsonParam;
   }
-  if (rebuilt.length !== 1 || risonEncode(rebuilt[0]) !== risonEncode(filter)) return jsonGroup;
-  return optionGroup(name, text);
+  if (rebuilt.length !== 1 || filterIdentity(rebuilt[0]) !== filterIdentity(filter)) return jsonParam;
+  return /** @type {FilterParam} */ (withoutUndefined({ [camelCase(name)]: text, label }));
+}
+
+/**
+ * The rison of a filter without the meta fields Kibana derives when it loads one
+ * (mapFilter() recomputes meta.value, and the filter editor adds meta.field = meta.key).
+ * @type {(filter: Filter) => string | undefined}
+ */
+function filterIdentity(filter) {
+  const { value, field, ...meta } = filter.meta;
+  return risonEncode({ ...filter, meta: field === undefined || field === meta.key ? meta : { ...meta, field } });
+}
+
+/** @type {(entry: FilterParam, common: FilterOptions) => Filter[]} */
+function filtersFromParam(entry, common) {
+  const record = isRisonObject(/** @type {RisonValue} */ (entry)) ? entry : {};
+  const { label, ...rest } = /** @type {Record<string, unknown>} */ (record);
+  const entries = Object.entries(rest);
+  const flag = FILTER_FLAGS.find((name) => entries.length === 1 && camelCase(name) === entries[0][0]);
+  if (!flag) {
+    const keys = FILTER_FLAGS.map(camelCase).join(', ');
+    throw new Error(`filters: expected an object with one of ${keys} (and an optional label), got ${JSON.stringify(entry)}`);
+  }
+  if (label !== undefined && typeof label !== 'string') throw new Error('filters: expected a string for label');
+  const [[, value]] = entries;
+  if (flag === 'filter-json') {
+    if (label !== undefined) throw new Error('filters: label can not be used with filterJson; set meta.alias instead');
+    return filtersFromJson(value);
+  }
+  if (typeof value !== 'string') throw new Error(`filters: expected a string for ${camelCase(flag)}`);
+  return filterFromArg(flag, value, { ...common, alias: label });
 }
 
 /** @type {(filter: Filter) => [FilterFlag, string] | undefined} */
@@ -823,6 +1037,14 @@ function filterArgCandidate(filter) {
   return undefined;
 }
 
+/** @type {(text: string) => [string, SortDirection]} */
+function parseSort(text) {
+  const colonIndex = text.lastIndexOf(':');
+  const direction = colonIndex > 0 ? text.slice(colonIndex + 1).toLowerCase() : '';
+  if (direction === 'asc' || direction === 'desc') return [text.slice(0, colonIndex), direction];
+  return [text, 'desc'];
+}
+
 /** @type {(command: string, groups: string[][]) => string} */
 function formatCommandLine(command, groups) {
   const lines = [command, ...groups.map((group) => `  ${group.map(shellQuote).join(' ')}`)];
@@ -846,91 +1068,33 @@ async function paramsFromValues(values, tokens) {
 
   /** @type {DiscoverUrlParams} */
   const base = values.params ? await readParamsFile(values.params) : {};
-  const columns = values.columns?.flatMap((text) =>
-    text.split(',').map((column) => column.trim()).filter(Boolean)
-  );
-  const refresh = parseInteger('refresh', values.refresh);
-  const docId = values['doc-id'];
-  const docIndex = values['doc-index'];
-  if ((docId === undefined) !== (docIndex === undefined)) {
-    throw new Error('--doc-id and --doc-index must be used together');
-  }
+  const cliValues = /** @type {Record<string, string | boolean | string[] | undefined>} */ (values);
 
-  const tabLabel = values['tab-label'] ?? base.tab?.label;
-  const tabId = values['tab-id'] ?? base.tab?.id ?? (tabLabel === undefined ? undefined : NEW_TAB_ID);
-
-  const refreshPaused = values['refresh-paused'];
-  const refreshInterval =
-    refresh === undefined && refreshPaused === undefined
-      ? undefined
-      : {
-          pause: refreshPaused ?? false,
-          value: refresh ?? base.refreshInterval?.value ?? DEFAULT_REFRESH_INTERVAL,
-        };
-
-  const hasQueryOverride = [values.esql, values.kql, values.lucene].some(
-    (value) => value !== undefined
-  );
-  /** @type {FilterOptions} */
-  const filterOptions = {
-    pinned: values['pin-filters'] ?? false,
-    index: values['data-view'] ?? base.dataViewId,
-  };
-
-  /** @type {DiscoverUrlParams} */
-  const overrides = {
-    kibanaUrl: values.kibana,
-    spaceId: values.space,
-    savedSearchId: values['saved-search'],
-    searchSessionId: values.session,
-    tab: tabId === undefined ? undefined : { id: tabId, label: tabLabel },
-    esql: values.esql,
-    kql: values.kql,
-    lucene: values.lucene,
-    dataViewId: values['data-view'],
-    savedQuery: values['saved-query'],
-    timeRange: timeRangeFromCli(values, base.timeRange),
-    refreshInterval,
-    filters: [...(base.filters ?? []), ...filtersFromCli(tokens, filterOptions)],
-    columns,
-    sort: sortFromCli(values),
-    grid: values.grid === undefined ? undefined : parseJsonObject('grid', values.grid),
-    interval: values.interval,
-    breakdownField: values.breakdown,
-    viewMode: parseChoice('view-mode', values['view-mode'], VIEW_MODES),
-    hideAggregatedPreview: values['hide-aggregated-preview'],
-    hideChart: values['hide-chart'],
-    hideTable: values['hide-table'],
-    hideSidebar: values['hide-sidebar'],
-    sampleSize: parseInteger('sample-size', values['sample-size']),
-    rowsPerPage: parseInteger('rows-per-page', values['rows-per-page']),
-    rowHeight: parseInteger('row-height', values['row-height']),
-    headerRowHeight: parseInteger('header-row-height', values['header-row-height']),
-    density: parseChoice('density', values.density, DENSITIES),
-    documentsDisplayMode: parseChoice('display-mode', values['display-mode'], DISPLAY_MODES),
-    esqlApproximation: values['esql-approximation'],
-    expandedDoc:
-      docId === undefined || docIndex === undefined
-        ? undefined
-        : { id: docId, index: docIndex, routing: values['doc-routing'] },
-    profileState:
-      values['profile-state'] === undefined
-        ? undefined
-        : parseJsonObject('profile-state', values['profile-state']),
-  };
-
-  /** @type {CliParams} */
+  /** @type {Record<string, unknown>} */
   const merged = { ...base };
-  for (const [key, value] of Object.entries(overrides)) {
-    if (value !== undefined) /** @type {Record<string, unknown>} */ (merged)[key] = value;
+  for (const [name, kind] of Object.entries(PARAM_OPTIONS)) {
+    const value = cliValues[name];
+    if (value !== undefined) merged[camelCase(name)] = paramFromCli(name, kind, value);
   }
-  if (hasQueryOverride) {
-    for (const key of /** @type {const} */ (['esql', 'kql', 'lucene', 'query'])) {
-      if (overrides[key] === undefined) delete merged[key];
-    }
+  if ([values.esql, values.kql, values.lucene].some((value) => value !== undefined)) {
+    for (const key of ['esql', 'kql', 'lucene']) if (cliValues[key] === undefined) delete merged[key];
   }
-  merged.open = values.open;
-  return merged;
+  const filters = [...(base.filters ?? []), ...filtersFromCli(tokens)];
+  if (filters.length) merged.filters = filters;
+  if (values.open) merged.open = true;
+  return /** @type {CliParams} */ (merged);
+}
+
+/** @type {(name: string, kind: ParamKind, value: string | boolean | string[]) => unknown} */
+function paramFromCli(name, kind, value) {
+  if (typeof value === 'boolean') return value;
+  if (Array.isArray(value)) {
+    if (kind !== 'list') return value;
+    return value.flatMap((text) => text.split(',').map((item) => item.trim()).filter(Boolean));
+  }
+  if (kind === 'integer') return parseInteger(name, value);
+  if (kind === 'json') return parseJsonObject(name, value);
+  return value;
 }
 
 /** @type {(values: CliValues) => Promise<void>} */
@@ -944,8 +1108,18 @@ async function runParse(values) {
   const output = parseChoice('output', values.output, OUTPUT_FORMATS) ?? 'args';
   const { params, warnings } = parseDiscoverUrl(input);
   for (const warning of warnings) process.stderr.write(`discover-url: warning: ${warning}\n`);
-  if (output === 'json') process.stdout.write(`${JSON.stringify(params, null, 2)}\n`);
+  if (output === 'json') process.stdout.write(formatParamsJson(params));
   else process.stdout.write(formatCommandLine(commandName(), paramsToArgGroups(params)));
+}
+
+/** @type {(params: DiscoverUrlParams) => string} */
+function formatParamsJson(params) {
+  const lines = Object.entries(params).map(([key, value]) => {
+    if (key !== 'filters' || !Array.isArray(value)) return `  ${JSON.stringify(key)}: ${JSON.stringify(value)}`;
+    const filters = value.map((filter) => `    ${JSON.stringify(filter)}`);
+    return `  "filters": [\n${filters.join(',\n')}\n  ]`;
+  });
+  return lines.length ? `{\n${lines.join(',\n')}\n}\n` : '{}\n';
 }
 
 // ---------------------------------------------------------------------------
@@ -1132,6 +1306,7 @@ const CLI_OPTIONS = /** @type {const} */ ({
   'filter-exists': { type: 'string', multiple: true },
   'filter-dsl': { type: 'string', multiple: true },
   'filter-json': { type: 'string', multiple: true },
+  'filter-label': { type: 'string', multiple: true },
   'pin-filters': { type: 'boolean' },
   columns: { type: 'string', multiple: true },
   sort: { type: 'string', multiple: true },
@@ -1168,6 +1343,7 @@ const FILTER_FLAGS = /** @type {const} */ ([
   'filter-json',
 ]);
 const OUTPUT_FORMATS = /** @type {const} */ (['args', 'json']);
+const FILTER_LABEL_ERROR = '--filter-label must be followed by a filter option';
 
 /** @type {(args: string[]) => Promise<ReturnType<typeof import('node:util').parseArgs<CliConfig>>>} */
 async function parseCliArgs(args) {
@@ -1271,14 +1447,29 @@ function isFilterFlag(name) {
   return FILTER_FLAGS.some((flag) => flag === name);
 }
 
-/** @type {(tokens: CliTokens, common: FilterOptions) => Filter[]} */
-function filtersFromCli(tokens, common) {
-  /** @type {Filter[]} */
+/** @type {(tokens: CliTokens) => FilterParam[]} */
+function filtersFromCli(tokens) {
+  /** @type {FilterParam[]} */
   const filters = [];
+  /** @type {string | undefined} */
+  let label;
   for (const token of tokens) {
-    if (token.kind !== 'option' || !isFilterFlag(token.name) || token.value === undefined) continue;
-    filters.push(...filterFromArg(token.name, token.value, common));
+    if (token.kind !== 'option' || token.value === undefined) continue;
+    const { name, value } = token;
+    if (name === 'filter-label') {
+      if (label !== undefined) throw new Error(FILTER_LABEL_ERROR);
+      label = value;
+      continue;
+    }
+    if (!isFilterFlag(name)) continue;
+    if (name === 'filter-json' && label !== undefined) {
+      throw new Error('--filter-label can not be used with --filter-json; set meta.alias instead');
+    }
+    const param = name === 'filter-json' ? parseJson(name, value) : value;
+    filters.push(/** @type {FilterParam} */ (withoutUndefined({ [camelCase(name)]: param, label })));
+    label = undefined;
   }
+  if (label !== undefined) throw new Error(FILTER_LABEL_ERROR);
   return filters;
 }
 
@@ -1321,42 +1512,21 @@ function filterFromArg(name, text, common) {
       const query = parseJsonObject(name, rest);
       return [customFilter(query, { ...common, disabled, negate })];
     }
-    case 'filter-json': {
-      const value = parseJson(name, text);
-      const items = Array.isArray(value) ? value : [value];
-      /** @type {Filter[]} */
-      const filters = [];
-      for (const item of items) {
-        if (!isFilter(item)) {
-          throw new Error('--filter-json: expected Filter object(s) with a "meta" property');
-        }
-        filters.push(item);
-      }
-      return filters;
-    }
+    case 'filter-json':
+      return filtersFromJson(parseJson(name, text));
   }
 }
 
-/** @type {(values: CliValues) => Array<[string, SortDirection]> | undefined} */
-function sortFromCli(values) {
-  if (!values.sort) return undefined;
-  return values.sort.map((text) => {
-    const colonIndex = text.lastIndexOf(':');
-    const hasDirection = colonIndex > 0 && /^(asc|desc)$/i.test(text.slice(colonIndex + 1));
-    const field = hasDirection ? text.slice(0, colonIndex) : text;
-    /** @type {SortDirection} */
-    const direction = hasDirection
-      ? /** @type {SortDirection} */ (text.slice(colonIndex + 1).toLowerCase())
-      : 'desc';
-    return /** @type {[string, SortDirection]} */ ([field, direction]);
-  });
-}
-
-/** @type {(values: CliValues, base?: TimeRange) => TimeRange | undefined} */
-function timeRangeFromCli(values, base) {
-  const { from, to } = values;
-  if (from === undefined && to === undefined) return base;
-  return { from: from ?? base?.from ?? 'now-15m', to: to ?? base?.to ?? 'now' };
+/** @type {(value: unknown) => Filter[]} */
+function filtersFromJson(value) {
+  const items = Array.isArray(value) ? value : [value];
+  /** @type {Filter[]} */
+  const filters = [];
+  for (const item of items) {
+    if (!isFilter(item)) throw new Error('--filter-json: expected Filter object(s) with a "meta" property');
+    filters.push(item);
+  }
+  return filters;
 }
 
 /** @type {(url: string) => Promise<void>} */
@@ -1376,15 +1546,226 @@ function commandName() {
 // types
 // ---------------------------------------------------------------------------
 
+/** @typedef {{ from: string; to: string }} TimeRange */
+/** @typedef {{ pause: boolean; value: number }} RefreshInterval */
+/** @typedef {{ language: 'kuery' | 'lucene'; query: string }} KueryOrLuceneQuery */
+/** @typedef {{ esql: string }} EsqlQuery */
+/** @typedef {KueryOrLuceneQuery | EsqlQuery} DiscoverQuery */
+/** @typedef {{ id: string; index: string; routing?: string }} ExpandedDoc */
+/** @typedef {{ id: string; label?: string }} DiscoverTab */
+/** @typedef {(typeof PARAM_OPTIONS)[keyof typeof PARAM_OPTIONS]} ParamKind */
+
+/**
+ * Discover's URL state, in the shape of Discover's own locator parameters.
+ * @typedef {{
+ *   kibanaUrl?: string;
+ *   spaceId?: string;
+ *   savedSearchId?: string;
+ *   searchSessionId?: string;
+ *   tab?: DiscoverTab;
+ *   esql?: string;
+ *   kql?: string;
+ *   lucene?: string;
+ *   dataViewId?: string;
+ *   timeRange?: TimeRange;
+ *   refreshInterval?: RefreshInterval;
+ *   filters?: Filter[];
+ *   columns?: string[];
+ *   sort?: Array<[string, SortDirection]>;
+ *   grid?: RisonObject;
+ *   savedQuery?: string;
+ *   interval?: string;
+ *   viewMode?: ViewMode;
+ *   hideAggregatedPreview?: boolean;
+ *   breakdownField?: string;
+ *   hideChart?: boolean;
+ *   hideTable?: boolean;
+ *   hideSidebar?: boolean;
+ *   sampleSize?: number;
+ *   rowHeight?: number;
+ *   headerRowHeight?: number;
+ *   rowsPerPage?: number;
+ *   density?: Density;
+ *   documentsDisplayMode?: DocumentsDisplayMode;
+ *   esqlApproximation?: boolean;
+ *   expandedDoc?: ExpandedDoc;
+ *   profileState?: RisonObject;
+ * }} UrlState
+ */
+
+/** @typedef {{ text: string; index: number }} RisonParser */
+/** @typedef {DiscoverUrlParams & { open?: boolean; help?: boolean }} CliParams */
+/** @typedef {(typeof FILTER_FLAGS)[number]} FilterFlag */
+
+/**
+ * @typedef {{
+ *   args: string[];
+ *   options: typeof CLI_OPTIONS;
+ *   strict: true;
+ *   allowPositionals: false;
+ *   allowNegative: true;
+ *   tokens: true;
+ * }} CliConfig
+ */
+
+/** @typedef {Awaited<ReturnType<typeof parseCliArgs>>['values']} CliValues */
+/** @typedef {Awaited<ReturnType<typeof parseCliArgs>>['tokens']} CliTokens */
+
+// ---------------------------------------------------------------------------
+// help text
+// ---------------------------------------------------------------------------
+
+/** @type {() => string} */
+function helpText() {
+  return `usage: ${commandName()} [options]
+
+Prints a Kibana Discover URL built from the options.
+
+connection:
+  --kibana URL              Kibana base URL incl. base path ($KIBANA_URL, default ${DEFAULT_KIBANA_URL})
+  --space ID                Kibana space id
+  --params FILE             JSON file (or - for stdin) with the options (see JSON below); options
+                            override it, and filter options are added to its filters
+  --open                    also open the URL in the browser
+
+parsing an existing URL:
+  --parse URL               print the options for an existing Discover URL, #/... fragment,
+                            or _a=...&_g=... query string (- reads it from stdin)
+  --output FORMAT           with --parse: args (command-line options, default) or
+                            json (the same options as JSON, for --params or buildDiscoverUrl())
+
+query and data:
+  --esql QUERY              ES|QL query (switches to ES|QL mode)
+  --kql QUERY               KQL query
+  --lucene QUERY            Lucene query
+  --data-view ID            data view id (not used with --esql)
+  --saved-query ID          saved query id
+  --saved-search ID         open a saved Discover session
+  --session ID              search session id
+  --tab-label LABEL         open the URL in a new Discover tab with this label
+  --tab-id ID               select an open Discover tab (default new with --tab-label)
+
+time:
+  --from TIME               start time, e.g. now-24h or 2026-10-31T00:00:00Z (default now-15m if --to given)
+  --to TIME                 end time (default now if --from given)
+  --refresh MS              auto-refresh interval in ms (enables auto-refresh)
+  --refresh-paused          set the refresh interval but leave auto-refresh paused
+                            (interval defaults to 60000 when --refresh is not given)
+
+filters (repeatable):
+  --filter FIELD=VALUE      "is" filter
+  --filter-in FIELD=V1,V2   "is one of" filter
+  --filter-range FIELD=A..B "is between" filter (gte A, lt B; either side may be empty)
+  --filter-exists FIELD     "exists" filter
+  --filter-dsl JSON         custom query DSL filter
+  --filter-json JSON        raw Filter object or array of Filter objects (used as-is)
+  --filter-label LABEL      custom label for the next filter option, e.g.
+                            --filter-label Errors --filter-exists error.message
+  --pin-filters             pin the filters given on the command line
+
+  modifiers (any filter flag except --filter-json):
+    FIELD!=VALUE         negate
+    leading ^ or !       negate (! needs quoting in interactive shells; ^ does not in bash)
+    leading %            add the filter disabled
+  e.g. --filter %kibana.task.type!=alerting:.es-query   --filter-exists %^error.message
+  filters get meta.index from --data-view, and can not be used with --esql
+
+layout:
+  --columns A,B,C           columns (repeatable)
+  --sort FIELD[:asc|desc]   sort (repeatable, default desc)
+  --grid JSON               data grid settings, e.g. '{"columns":{"message":{"width":400}}}'
+  --interval INTERVAL       histogram interval (auto, ms, s, m, h, d, w, M, y)
+  --breakdown FIELD         histogram breakdown field
+  --view-mode MODE          documents | patterns | aggregated
+  --hide-aggregated-preview hide field statistics previews
+  --hide-chart              hide the histogram
+  --hide-table              hide the documents table
+  --hide-sidebar            collapse the field list
+  --sample-size N           number of documents to fetch
+  --rows-per-page N         grid rows per page
+  --row-height N            row height in lines (--row-height=-1 for auto)
+  --header-row-height N     header row height in lines (--header-row-height=-1 for auto)
+  --density MODE            compact | normal | expanded
+  --display-mode MODE       table | json
+  --esql-approximation      approximate ES|QL execution
+  --doc-id ID               open the document flyout for this document id
+  --doc-index INDEX         index of the --doc-id document
+  --doc-routing ROUTING     routing of the --doc-id document
+  --profile-state JSON      profile URL state (_p)
+
+  boolean options can be negated with --no-, e.g. --no-hide-chart writes hideChart:!f
+
+JSON (--params, --output json, and buildDiscoverUrl()):
+  the options as camelCase keys, e.g. --data-view X --hide-sidebar is
+    {"dataView": "X", "hideSidebar": true}
+  --columns and --sort are arrays; --grid and --profile-state are objects
+  filters are an ordered array with one key per filter option, e.g.
+    "filters": [{"filter": "event.provider=alerting"}, {"filterExists": "^error.message"}]
+  with filterJson values as Filter objects instead of JSON strings, and --filter-label as a
+  label key on the filter it applies to, e.g. {"filterExists": "error.message", "label": "Errors"}
+
+  -h, --help                show this help
+`;
+}
+
+// ---------------------------------------------------------------------------
+// exports
+// ---------------------------------------------------------------------------
+
+// Node only detects named exports (for `import { ... } from 'discover-url'`) when
+// `module.exports` is assigned an object literal, so the list is repeated for the browser.
+if (typeof module === 'object') {
+  module.exports = {
+    DEFAULT_KIBANA_URL,
+    NEW_TAB_ID,
+    buildDiscoverUrl,
+    parseDiscoverUrl,
+    paramsToArgs,
+    phraseFilter,
+    phrasesFilter,
+    rangeFilter,
+    existsFilter,
+    customFilter,
+    risonEncode,
+    risonDecode,
+    encodeUriQuery,
+    paramsFromArgs,
+    main,
+  };
+  if (require.main === module) main().then((exitCode) => (process.exitCode = exitCode));
+} else {
+  Object.assign(globalThis, {
+    discoverUrl: {
+      DEFAULT_KIBANA_URL,
+      NEW_TAB_ID,
+      buildDiscoverUrl,
+      parseDiscoverUrl,
+      paramsToArgs,
+      phraseFilter,
+      phrasesFilter,
+      rangeFilter,
+      existsFilter,
+      customFilter,
+      risonEncode,
+      risonDecode,
+      encodeUriQuery,
+    },
+  });
+}
+
+})();
+
+// ---------------------------------------------------------------------------
+// public types (outside the function, so TypeScript can export them)
+// ---------------------------------------------------------------------------
+
 /**
  * Any value that can be rison-encoded; `undefined` values are omitted.
  * @typedef {boolean | string | number | null | undefined | RisonArray | RisonObject} RisonValue
  */
 
 /** @typedef {RisonValue[]} RisonArray */
-
 /** @typedef {{ [key: string]: RisonValue }} RisonObject */
-
 /** @typedef {'appState' | 'globalState'} FilterStore */
 
 /**
@@ -1442,230 +1823,68 @@ function commandName() {
  * }} RangeParams
  */
 
-/** @typedef {{ from: string; to: string }} TimeRange */
-
-/** @typedef {{ pause: boolean; value: number }} RefreshInterval */
-
-/** @typedef {{ language: 'kuery' | 'lucene'; query: string }} KueryOrLuceneQuery */
-/** @typedef {{ esql: string }} EsqlQuery */
-/** @typedef {KueryOrLuceneQuery | EsqlQuery} DiscoverQuery */
-
 /** @typedef {'asc' | 'desc'} SortDirection */
 /** @typedef {'documents' | 'patterns' | 'aggregated'} ViewMode */
 /** @typedef {'compact' | 'normal' | 'expanded'} Density */
 /** @typedef {'table' | 'json'} DocumentsDisplayMode */
 
-/** @typedef {{ id: string; index: string; routing?: string }} ExpandedDoc */
-
 /**
- * A Discover tab; `id` defaults to NEW_TAB_ID, which opens the URL in a new tab with `label`.
- * @typedef {{ id?: string; label?: string }} DiscoverTab
- */
-
-/**
- * Parameters for buildDiscoverUrl():
- * - kibanaUrl: Kibana base URL, including any base path; defaults to $KIBANA_URL (Node) or http://localhost:5601
- * - spaceId: Kibana space id; omitted or `default` means the default space
- * - savedSearchId: open a saved Discover session by id
- * - searchSessionId: restore a background search session
- * - tab: open a new Discover tab with a label, e.g. `{ label: 'Slow rules' }`, or select a tab by id
- * - esql / kql / lucene / query: the query (at most one); esql switches Discover to ES|QL mode
- * - dataViewId: data view id (data view mode only)
- * - filters: filter pills (not with esql); filters with `$state.store === 'globalState'` are pinned
- * - grid: data grid settings, e.g. `{ columns: { message: { width: 400 } } }`
- * - interval: histogram interval, e.g. `auto`, `h`, `d`
- * - profileState: URL-type context-awareness profile state (`_p`)
+ * Parameters for buildDiscoverUrl(), --params, and --output json: the command-line options as
+ * camelCase keys (see `discover-url.js --help` for what each one does).
+ * - repeatable options are arrays: `columns` (field names) and `sort` (`FIELD[:asc|desc]`)
+ * - filters are an ordered array of FilterParam, one per filter option
+ * - grid and profileState are objects, not JSON strings
  * @typedef {{
- *   kibanaUrl?: string;
- *   spaceId?: string;
- *   savedSearchId?: string;
- *   searchSessionId?: string;
- *   tab?: DiscoverTab;
+ *   kibana?: string;
+ *   space?: string;
+ *   savedSearch?: string;
+ *   session?: string;
+ *   tabId?: string;
+ *   tabLabel?: string;
  *   esql?: string;
  *   kql?: string;
  *   lucene?: string;
- *   query?: DiscoverQuery;
- *   dataViewId?: string;
- *   timeRange?: TimeRange;
- *   refreshInterval?: RefreshInterval;
- *   filters?: Filter[];
- *   columns?: string[];
- *   sort?: Array<[string, SortDirection]>;
- *   grid?: RisonObject;
+ *   dataView?: string;
  *   savedQuery?: string;
+ *   from?: string;
+ *   to?: string;
+ *   refresh?: number;
+ *   refreshPaused?: boolean;
+ *   pinFilters?: boolean;
+ *   filters?: FilterParam[];
+ *   columns?: string[];
+ *   sort?: string[];
+ *   grid?: RisonObject;
  *   interval?: string;
+ *   breakdown?: string;
  *   viewMode?: ViewMode;
  *   hideAggregatedPreview?: boolean;
- *   breakdownField?: string;
  *   hideChart?: boolean;
  *   hideTable?: boolean;
  *   hideSidebar?: boolean;
  *   sampleSize?: number;
+ *   rowsPerPage?: number;
  *   rowHeight?: number;
  *   headerRowHeight?: number;
- *   rowsPerPage?: number;
  *   density?: Density;
- *   documentsDisplayMode?: DocumentsDisplayMode;
+ *   displayMode?: DocumentsDisplayMode;
  *   esqlApproximation?: boolean;
- *   expandedDoc?: ExpandedDoc;
+ *   docId?: string;
+ *   docIndex?: string;
+ *   docRouting?: string;
  *   profileState?: RisonObject;
  * }} DiscoverUrlParams
+ */
+
+/**
+ * One filter, keyed by its filter option in camelCase, e.g. `{ filter: 'event.provider=alerting' }`
+ * or `{ filterJson: phraseFilter('event.provider', 'alerting') }`.
+ * A `label` (from --filter-label) sets the pill's custom label, except for filterJson.
+ * @typedef {({ filter: string } | { filterIn: string } | { filterRange: string } | { filterExists: string }
+ *   | { filterDsl: string }) & { label?: string } | { filterJson: Filter | Filter[] }} FilterParam
  */
 
 /**
  * Result of parseDiscoverUrl(); warnings list URL state that couldn't be represented.
  * @typedef {{ params: DiscoverUrlParams; warnings: string[] }} ParsedDiscoverUrl
  */
-
-/** @typedef {{ text: string; index: number }} RisonParser */
-
-/** @typedef {DiscoverUrlParams & { open?: boolean; help?: boolean }} CliParams */
-
-/** @typedef {(typeof FILTER_FLAGS)[number]} FilterFlag */
-
-/**
- * @typedef {{
- *   args: string[];
- *   options: typeof CLI_OPTIONS;
- *   strict: true;
- *   allowPositionals: false;
- *   allowNegative: true;
- *   tokens: true;
- * }} CliConfig
- */
-
-/** @typedef {Awaited<ReturnType<typeof parseCliArgs>>['values']} CliValues */
-
-/** @typedef {Awaited<ReturnType<typeof parseCliArgs>>['tokens']} CliTokens */
-
-// ---------------------------------------------------------------------------
-// help text
-// ---------------------------------------------------------------------------
-
-/** @type {() => string} */
-function helpText() {
-  return `usage: ${commandName()} [options]
-
-Prints a Kibana Discover URL built from the options.
-
-connection:
-  --kibana URL              Kibana base URL incl. base path ($KIBANA_URL, default ${DEFAULT_KIBANA_URL})
-  --space ID                Kibana space id
-  --params FILE             JSON file (or - for stdin) with DiscoverUrlParams; options override it
-  --open                    also open the URL in the browser
-
-parsing an existing URL:
-  --parse URL               print the options for an existing Discover URL, #/... fragment,
-                            or _a=...&_g=... query string (- reads it from stdin)
-  --output FORMAT           with --parse: args (command-line options, default) or
-                            json (the DiscoverUrlParams object for buildDiscoverUrl / --params)
-
-query and data:
-  --esql QUERY              ES|QL query (switches to ES|QL mode)
-  --kql QUERY               KQL query
-  --lucene QUERY            Lucene query
-  --data-view ID            data view id (not used with --esql)
-  --saved-query ID          saved query id
-  --saved-search ID         open a saved Discover session
-  --session ID              search session id
-  --tab-label LABEL         open the URL in a new Discover tab with this label
-  --tab-id ID               select an open Discover tab (default new with --tab-label)
-
-time:
-  --from TIME               start time, e.g. now-24h or 2026-10-31T00:00:00Z (default now-15m if --to given)
-  --to TIME                 end time (default now if --from given)
-  --refresh MS              auto-refresh interval in ms (enables auto-refresh)
-  --refresh-paused          set the refresh interval but leave auto-refresh paused
-                            (interval defaults to 60000 when --refresh is not given)
-
-filters (repeatable):
-  --filter FIELD=VALUE      "is" filter
-  --filter-in FIELD=V1,V2   "is one of" filter
-  --filter-range FIELD=A..B "is between" filter (gte A, lt B; either side may be empty)
-  --filter-exists FIELD     "exists" filter
-  --filter-dsl JSON         custom query DSL filter
-  --filter-json JSON        raw Filter object or array of Filter objects (used as-is)
-  --pin-filters             pin the filters given on the command line
-
-  modifiers (any filter flag except --filter-json):
-    FIELD!=VALUE         negate
-    leading ^ or !       negate (! needs quoting in interactive shells; ^ does not in bash)
-    leading %            add the filter disabled
-  e.g. --filter %kibana.task.type!=alerting:.es-query   --filter-exists %^error.message
-  filters get meta.index from --data-view, and can not be used with --esql
-
-layout:
-  --columns A,B,C           columns (repeatable)
-  --sort FIELD[:asc|desc]   sort (repeatable, default desc)
-  --grid JSON               data grid settings, e.g. '{"columns":{"message":{"width":400}}}'
-  --interval INTERVAL       histogram interval (auto, ms, s, m, h, d, w, M, y)
-  --breakdown FIELD         histogram breakdown field
-  --view-mode MODE          documents | patterns | aggregated
-  --hide-aggregated-preview hide field statistics previews
-  --hide-chart              hide the histogram
-  --hide-table              hide the documents table
-  --hide-sidebar            collapse the field list
-  --sample-size N           number of documents to fetch
-  --rows-per-page N         grid rows per page
-  --row-height N            row height in lines (--row-height=-1 for auto)
-  --header-row-height N     header row height in lines (--header-row-height=-1 for auto)
-  --density MODE            compact | normal | expanded
-  --display-mode MODE       table | json
-  --esql-approximation      approximate ES|QL execution
-  --doc-id ID               open the document flyout for this document id
-  --doc-index INDEX         index of the --doc-id document
-  --doc-routing ROUTING     routing of the --doc-id document
-  --profile-state JSON      profile URL state (_p)
-
-  boolean options can be negated with --no-, e.g. --no-hide-chart writes hideChart:!f
-
-  -h, --help                show this help
-`;
-}
-
-// ---------------------------------------------------------------------------
-// exports
-// ---------------------------------------------------------------------------
-
-// Node only detects named exports (for `import { ... } from 'discover-url'`) when
-// `module.exports` is assigned an object literal, so the list is repeated for the browser.
-if (typeof module === 'object') {
-  module.exports = {
-    DEFAULT_KIBANA_URL,
-    NEW_TAB_ID,
-    buildDiscoverUrl,
-    parseDiscoverUrl,
-    paramsToArgs,
-    phraseFilter,
-    phrasesFilter,
-    rangeFilter,
-    existsFilter,
-    customFilter,
-    risonEncode,
-    risonDecode,
-    encodeUriQuery,
-    paramsFromArgs,
-    main,
-  };
-  if (require.main === module) main().then((exitCode) => (process.exitCode = exitCode));
-} else {
-  Object.assign(globalThis, {
-    discoverUrl: {
-      DEFAULT_KIBANA_URL,
-      NEW_TAB_ID,
-      buildDiscoverUrl,
-      parseDiscoverUrl,
-      paramsToArgs,
-      phraseFilter,
-      phrasesFilter,
-      rangeFilter,
-      existsFilter,
-      customFilter,
-      risonEncode,
-      risonDecode,
-      encodeUriQuery,
-    },
-  });
-}
-
-})();

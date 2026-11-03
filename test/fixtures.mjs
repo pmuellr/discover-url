@@ -1,7 +1,5 @@
 // @ts-check
 
-import { phraseFilter } from '../discover-url.js';
-
 export const KIBANA_URL = 'http://localhost:5601';
 export const EVENT_LOG_DATA_VIEW = '.kibana-event-log-ds';
 export const EVENT_LOG_ESQL = 'FROM .kibana-event-log-* | WHERE event.provider == "alerting" | LIMIT 100';
@@ -24,30 +22,26 @@ export const EVENT_LOG_URL =
 /** EVENT_LOG_URL as rebuilt by buildDiscoverUrl(), which omits the empty `_g.filters`. */
 export const EVENT_LOG_URL_REBUILT = EVENT_LOG_URL.replace('_g=(filters:!(),', '_g=(');
 
-/** The DiscoverUrlParams that EVENT_LOG_URL parses into. */
+/** The DiscoverUrlParams that EVENT_LOG_URL parses into, in command-line order. */
 export const EVENT_LOG_PARAMS = {
-  kibanaUrl: KIBANA_URL,
-  tab: { id: '58335e51-bd2d-4b6f-a06c-e044f058c525' },
-  timeRange: { from: 'now-24h/h', to: 'now' },
-  refreshInterval: { pause: true, value: 60000 },
-  breakdownField: 'kibana.task.type',
-  columns: ['kibana.task.type', 'kibana.task.schedule_delay'],
-  dataViewId: EVENT_LOG_DATA_VIEW,
-  filters: [
-    phraseFilter('event.provider', 'taskManager', { index: EVENT_LOG_DATA_VIEW }),
-    phraseFilter('event.action', 'task-run', { index: EVENT_LOG_DATA_VIEW }),
-    phraseFilter('kibana.task.type', 'alerting:.es-query', {
-      index: EVENT_LOG_DATA_VIEW,
-      negate: true,
-      disabled: true,
-    }),
-  ],
-  hideChart: false,
-  hideSidebar: true,
-  hideTable: false,
-  interval: 'auto',
+  tabId: '58335e51-bd2d-4b6f-a06c-e044f058c525',
   kql: '',
-  sort: /** @type {Array<[string, 'asc' | 'desc']>} */ ([['@timestamp', 'desc']]),
+  dataView: EVENT_LOG_DATA_VIEW,
+  from: 'now-24h/h',
+  to: 'now',
+  refreshPaused: true,
+  filters: [
+    { filter: 'event.provider=taskManager' },
+    { filter: 'event.action=task-run' },
+    { filter: '%kibana.task.type!=alerting:.es-query' },
+  ],
+  columns: ['kibana.task.type', 'kibana.task.schedule_delay'],
+  sort: ['@timestamp:desc'],
+  interval: 'auto',
+  breakdown: 'kibana.task.type',
+  hideChart: false,
+  hideTable: false,
+  hideSidebar: true,
 };
 
 /** The command-line arguments that recreate EVENT_LOG_URL. */

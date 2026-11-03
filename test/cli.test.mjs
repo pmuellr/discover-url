@@ -45,7 +45,7 @@ describe('discover-url.js command line', () => {
     assert.equal(status, 0);
     assert.equal(
       stdout,
-      `${buildDiscoverUrl({ kibanaUrl: KIBANA_URL, esql: EVENT_LOG_ESQL, timeRange: { from: 'now-7d', to: 'now' } })}\n`
+      `${buildDiscoverUrl({ kibana: KIBANA_URL, esql: EVENT_LOG_ESQL, from: 'now-7d' })}\n`
     );
   });
 
@@ -63,10 +63,38 @@ describe('discover-url.js command line', () => {
       '--filter-exists', '^kibana.alerting.outcome',
     ]);
     assert.deepEqual(params.filters, [
-      existsFilter('error.message', { index: EVENT_LOG_DATA_VIEW }),
-      phraseFilter('event.provider', 'alerting', { index: EVENT_LOG_DATA_VIEW }),
-      existsFilter('kibana.alerting.outcome', { index: EVENT_LOG_DATA_VIEW, negate: true }),
+      { filterExists: 'error.message' },
+      { filter: 'event.provider=alerting' },
+      { filterExists: '^kibana.alerting.outcome' },
     ]);
+  });
+
+  it('labels the next filter with --filter-label', async () => {
+    const params = await paramsFromArgs([
+      '--filter-label', 'Errors', '--filter-exists', 'error.message',
+      '--filter', 'event.provider=alerting',
+    ]);
+    assert.deepEqual(params.filters, [{ filterExists: 'error.message', label: 'Errors' }, { filter: 'event.provider=alerting' }]);
+    assert.equal(
+      buildDiscoverUrl(params),
+      buildDiscoverUrl({ filters: [{ filterJson: existsFilter('error.message', { alias: 'Errors' }) }, { filter: 'event.provider=alerting' }] })
+    );
+  });
+
+  it('adds --filter-json filters as objects', async () => {
+    const filter = existsFilter('error.message');
+    const params = await paramsFromArgs(['--filter-json', JSON.stringify(filter)]);
+    assert.deepEqual(params.filters, [{ filterJson: filter }]);
+  });
+
+  it('adds filter options to the --params filters', () => {
+    const { status, stdout } = run(['--params', '-', '--filter', 'a=b'], JSON.stringify(EVENT_LOG_PARAMS));
+    assert.equal(status, 0);
+    const expected = buildDiscoverUrl({
+      ...EVENT_LOG_PARAMS,
+      filters: [...(EVENT_LOG_PARAMS.filters ?? []), { filter: 'a=b' }],
+    });
+    assert.equal(stdout, `${expected}\n`);
   });
 
   it('opens a new tab for --tab-label without --tab-id', () => {
@@ -81,9 +109,15 @@ describe('discover-url.js command line', () => {
       '--pin-filters',
       '--filter', 'event.provider=alerting',
     ]);
-    assert.deepEqual(params.filters, [
-      phraseFilter('event.provider', 'alerting', { index: EVENT_LOG_DATA_VIEW, pinned: true }),
-    ]);
+    assert.equal(params.pinFilters, true);
+    const url = buildDiscoverUrl(params);
+    assert.deepEqual(
+      url,
+      buildDiscoverUrl({
+        dataView: EVENT_LOG_DATA_VIEW,
+        filters: [{ filterJson: phraseFilter('event.provider', 'alerting', { index: EVENT_LOG_DATA_VIEW, pinned: true }) }],
+      })
+    );
   });
 
   it('rejects filters with an ES|QL query from --esql or --params', () => {
@@ -106,7 +140,7 @@ describe('discover-url.js command line', () => {
       assert.equal(status, 0);
       const expected = buildDiscoverUrl({
         ...EVENT_LOG_PARAMS,
-        timeRange: { from: 'now-1h', to: 'now' },
+        from: 'now-1h',
         hideChart: true,
       });
       assert.equal(stdout, `${expected}\n`);
@@ -124,11 +158,14 @@ describe('discover-url.js command line', () => {
   it('reports errors with exit code 1', () => {
     for (const [args, message] of [
       [['--bogus'], /Unknown option '--bogus'/],
-      [['--esql', 'FROM x', '--kql', 'a'], /only one of esql, kql, lucene, or query/],
+      [['--esql', 'FROM x', '--kql', 'a'], /only one of esql, kql, or lucene may be specified/],
       [['--density', 'huge'], /--density: expected one of compact, normal, expanded, got "huge"/],
       [['--sample-size', 'many'], /--sample-size: expected an integer, got "many"/],
       [['--filter', 'no-equals'], /--filter: expected FIELD=VALUE, got "no-equals"/],
       [['--doc-id', 'd1'], /--doc-id and --doc-index must be used together/],
+      [['--filter', 'a=b', '--filter-label', 'x'], /--filter-label must be followed by a filter option/],
+      [['--filter-label', 'x', '--filter-label', 'y', '--filter', 'a=b'], /--filter-label must be followed by a filter option/],
+      [['--filter-label', 'x', '--filter-json', '{"meta":{}}'], /--filter-label can not be used with --filter-json/],
       [['--output', 'json'], /--output requires --parse/],
     ]) {
       const { status, stdout, stderr } = run(/** @type {string[]} */ (args));

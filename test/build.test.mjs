@@ -38,106 +38,160 @@ describe('buildDiscoverUrl', () => {
     assert.equal(buildDiscoverUrl(), DISCOVER);
   });
 
-  it('uses $KIBANA_URL when kibanaUrl is not given', () => {
+  it('uses $KIBANA_URL when kibana is not given', () => {
     process.env.KIBANA_URL = 'https://kb.example.com';
     assert.equal(buildDiscoverUrl(), 'https://kb.example.com/app/discover#/');
   });
 
   it('handles base paths, spaces, saved sessions, and search sessions', () => {
     const url = buildDiscoverUrl({
-      kibanaUrl: 'https://kb.example.com/xyz/',
-      spaceId: 'dev',
-      savedSearchId: 'abc',
-      searchSessionId: 's1',
+      kibana: 'https://kb.example.com/xyz/',
+      space: 'dev',
+      savedSearch: 'abc',
+      session: 's1',
     });
     assert.equal(url, 'https://kb.example.com/xyz/s/dev/app/discover#/view/abc?searchSessionId=s1');
   });
 
-  it('opens a new tab when the tab has a label but no id', () => {
+  it('opens a new tab when there is a tab label but no tab id', () => {
     assert.equal(
-      buildDiscoverUrl({ kibanaUrl: KIBANA_URL, tab: { label: 'Slow rules' } }),
+      buildDiscoverUrl({ tabLabel: 'Slow rules' }),
       `${DISCOVER}?_tab=(tabId:new,tabLabel:'Slow%20rules')`
     );
   });
 
   it('omits the default space', () => {
-    assert.equal(buildDiscoverUrl({ kibanaUrl: KIBANA_URL, spaceId: 'default' }), DISCOVER);
+    assert.equal(buildDiscoverUrl({ space: 'default' }), DISCOVER);
   });
 
   it('builds ES|QL URLs', () => {
-    const url = buildDiscoverUrl({
-      kibanaUrl: KIBANA_URL,
-      esql: EVENT_LOG_ESQL,
-      timeRange: { from: 'now-7d', to: 'now' },
-    });
     assert.equal(
-      url,
+      buildDiscoverUrl({ esql: EVENT_LOG_ESQL, from: 'now-7d' }),
       `${DISCOVER}?_g=(time:(from:now-7d,to:now))` +
         "&_a=(dataSource:(type:esql),query:(esql:'FROM%20.kibana-event-log-*%20%7C%20WHERE%20" +
         "event.provider%20%3D%3D%20%22alerting%22%20%7C%20LIMIT%20100'))"
     );
   });
 
+  it('defaults the other end of the time range', () => {
+    assert.equal(buildDiscoverUrl({ to: 'now-1h' }), `${DISCOVER}?_g=(time:(from:now-15m,to:now-1h))`);
+  });
+
   it('builds KQL and Lucene URLs with a data view', () => {
     assert.equal(
-      buildDiscoverUrl({ kibanaUrl: KIBANA_URL, kql: 'event.outcome: failure', dataViewId: EVENT_LOG_DATA_VIEW }),
+      buildDiscoverUrl({ kql: 'event.outcome: failure', dataView: EVENT_LOG_DATA_VIEW }),
       `${DISCOVER}?_a=(dataSource:(dataViewId:.kibana-event-log-ds,type:dataView),` +
         "query:(language:kuery,query:'event.outcome:%20failure'))"
     );
     assert.equal(
-      buildDiscoverUrl({ kibanaUrl: KIBANA_URL, lucene: 'rule.id:abc' }),
+      buildDiscoverUrl({ lucene: 'rule.id:abc' }),
       `${DISCOVER}?_a=(query:(language:lucene,query:'rule.id:abc'))`
     );
   });
 
   it('ignores the data view in ES|QL mode', () => {
     assert.equal(
-      buildDiscoverUrl({ kibanaUrl: KIBANA_URL, esql: 'FROM x', dataViewId: EVENT_LOG_DATA_VIEW }),
+      buildDiscoverUrl({ esql: 'FROM x', dataView: EVENT_LOG_DATA_VIEW }),
       `${DISCOVER}?_a=(dataSource:(type:esql),query:(esql:'FROM%20x'))`
     );
   });
 
   it('rejects filters in ES|QL mode', () => {
     assert.throws(
-      () => buildDiscoverUrl({ esql: 'FROM x', filters: [existsFilter('error.message')] }),
+      () => buildDiscoverUrl({ esql: 'FROM x', filters: [{ filterExists: 'error.message' }] }),
       /filters can not be used with an ES\|QL query/
     );
   });
 
   it('rejects more than one query', () => {
-    assert.throws(
-      () => buildDiscoverUrl({ esql: 'FROM x', kql: 'a' }),
-      /only one of esql, kql, lucene, or query/
+    assert.throws(() => buildDiscoverUrl({ esql: 'FROM x', kql: 'a' }), /only one of esql, kql, or lucene/);
+  });
+
+  it('rejects unknown parameters', () => {
+    const params = /** @type {import('../discover-url.js').DiscoverUrlParams} */ (
+      /** @type {unknown} */ ({ kibanaUrl: KIBANA_URL, dataViewId: 'x' })
     );
+    assert.throws(() => buildDiscoverUrl(params), /unknown parameter "kibanaUrl", "dataViewId"/);
   });
 
   it('builds the event log URL copied from Discover', () => {
     assert.equal(buildDiscoverUrl(EVENT_LOG_PARAMS), EVENT_LOG_URL_REBUILT);
   });
 
+  it('builds filters from the filter options, with the data view as their index', () => {
+    const index = EVENT_LOG_DATA_VIEW;
+    const url = buildDiscoverUrl({
+      dataView: index,
+      filters: [
+        { filter: 'event.action!=execute' },
+        { filterIn: '%event.outcome=failure,unknown' },
+        { filterRange: 'event.duration=1000000000..' },
+        { filterExists: '^error.message' },
+        { filterDsl: '{"query_string":{"query":"rule.name:*cpu*"}}' },
+        { filterJson: existsFilter('kibana.alert.uuid', { alias: 'has alert' }) },
+      ],
+    });
+    const expected = buildFiltersUrl(index, [
+      phraseFilter('event.action', 'execute', { index, negate: true }),
+      phrasesFilter('event.outcome', ['failure', 'unknown'], { index, disabled: true }),
+      rangeFilter('event.duration', { gte: 1000000000 }, { index }),
+      existsFilter('error.message', { index, negate: true }),
+      customFilter({ query_string: { query: 'rule.name:*cpu*' } }, { index }),
+      existsFilter('kibana.alert.uuid', { alias: 'has alert' }),
+    ]);
+    assert.equal(url, expected);
+  });
+
   it('puts pinned filters in _g and the rest in _a', () => {
     const url = buildDiscoverUrl({
-      kibanaUrl: KIBANA_URL,
-      filters: [phraseFilter('event.provider', 'alerting', { pinned: true }), existsFilter('error.message')],
+      filters: [
+        { filterJson: phraseFilter('event.provider', 'alerting', { pinned: true }) },
+        { filterExists: 'error.message' },
+      ],
     });
     assert.match(url, /_g=\(filters:!\(\('\$state':\(store:globalState\),meta:\(.*key:event\.provider/);
     assert.match(url, /_a=\(filters:!\(\('\$state':\(store:appState\),meta:\(.*key:error\.message/);
   });
 
+  it('pins the filter options with pinFilters', () => {
+    const url = buildDiscoverUrl({ pinFilters: true, filters: [{ filterExists: 'error.message' }] });
+    assert.match(url, /^[^&]*_g=\(filters:!\(\('\$state':\(store:globalState\),meta:\(.*key:error\.message/);
+  });
+
+  it('rejects malformed filters', () => {
+    const filters = /** @type {import('../discover-url.js').FilterParam[]} */ (
+      /** @type {unknown} */ ([{ filter: 'a=b', filterExists: 'c' }])
+    );
+    assert.throws(() => buildDiscoverUrl({ filters }), /filters: expected an object with one of filter, filterIn/);
+    assert.throws(() => buildDiscoverUrl({ filters: [{ filter: 'no-equals' }] }), /--filter: expected FIELD=VALUE/);
+    const labeledJson = /** @type {import('../discover-url.js').FilterParam[]} */ (
+      /** @type {unknown} */ ([{ filterJson: existsFilter('a'), label: 'x' }])
+    );
+    assert.throws(() => buildDiscoverUrl({ filters: labeledJson }), /label can not be used with filterJson/);
+  });
+
+  it('labels filters with label', () => {
+    assert.equal(
+      buildDiscoverUrl({ filters: [{ filter: 'a=b', label: 'A is b' }] }),
+      buildDiscoverUrl({ filters: [{ filterJson: phraseFilter('a', 'b', { alias: 'A is b' }) }] })
+    );
+  });
+
   it('writes layout options', () => {
     const url = buildDiscoverUrl({
-      kibanaUrl: KIBANA_URL,
+      tabId: 't1',
+      tabLabel: 'My tab',
       columns: ['rule.name', 'event.duration'],
-      sort: [['event.duration', 'desc']],
+      sort: ['event.duration'],
       grid: { columns: { 'rule.name': { width: 300 } } },
+      viewMode: 'documents',
       hideChart: true,
       sampleSize: 1000,
       rowHeight: -1,
       density: 'compact',
-      documentsDisplayMode: 'json',
-      viewMode: 'documents',
-      expandedDoc: { id: 'd1', index: '.ds-.kibana-event-log-ds-2026.10.31-000001' },
-      tab: { id: 't1', label: 'My tab' },
+      displayMode: 'json',
+      docId: 'd1',
+      docIndex: '.ds-.kibana-event-log-ds-2026.10.31-000001',
       profileState: { foo: 'bar' },
     });
     assert.equal(
@@ -150,10 +204,26 @@ describe('buildDiscoverUrl', () => {
     );
   });
 
+  it('writes the refresh interval', () => {
+    assert.equal(buildDiscoverUrl({ refreshPaused: true }), `${DISCOVER}?_g=(refreshInterval:(pause:!t,value:60000))`);
+    assert.equal(buildDiscoverUrl({ refresh: 5000 }), `${DISCOVER}?_g=(refreshInterval:(pause:!f,value:5000))`);
+  });
+
+  it('rejects invalid choices and a document id without an index', () => {
+    const density = /** @type {'compact'} */ (/** @type {string} */ ('huge'));
+    assert.throws(() => buildDiscoverUrl({ density }), /--density: expected one of compact, normal, expanded/);
+    assert.throws(() => buildDiscoverUrl({ docId: 'd1' }), /--doc-id and --doc-index must be used together/);
+  });
+
   it('omits a sample size of zero', () => {
-    assert.equal(buildDiscoverUrl({ kibanaUrl: KIBANA_URL, sampleSize: 0 }), DISCOVER);
+    assert.equal(buildDiscoverUrl({ sampleSize: 0 }), DISCOVER);
   });
 });
+
+/** @type {(index: string, filters: import('../discover-url.js').Filter[]) => string} */
+function buildFiltersUrl(index, filters) {
+  return buildDiscoverUrl({ dataView: index, filters: filters.map((filter) => ({ filterJson: filter })) });
+}
 
 describe('filter builders', () => {
   it('phraseFilter', () => {
